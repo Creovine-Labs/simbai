@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { get, put } from "@vercel/blob";
+import { del, get, put } from "@vercel/blob";
 import {
   FileAsset,
   LocalState,
@@ -65,6 +65,17 @@ export async function writeServerState(state: LocalState) {
 }
 
 export async function resetServerState() {
+  if (shouldUseVercelBlob()) {
+    const currentState = await readServerState();
+    const blobPaths = currentState.files
+      .map((file) => file.blobPath)
+      .filter((blobPath): blobPath is string => Boolean(blobPath));
+
+    if (blobPaths.length > 0) {
+      await del(blobPaths);
+    }
+  }
+
   const state = emptyState();
   await writeServerState(state);
   return state;
