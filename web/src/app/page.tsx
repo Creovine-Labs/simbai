@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   LocalState,
@@ -19,6 +20,7 @@ type PublicUser = {
 };
 
 export default function Home() {
+  const router = useRouter();
   const [state, setState] = useState<LocalState>(emptyState());
   const [user, setUser] = useState<PublicUser | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -53,7 +55,7 @@ export default function Home() {
     const payload = await response.json();
 
     if (!response.ok || !payload.user) {
-      window.location.href = "/login";
+      router.push("/login");
       return;
     }
 
@@ -72,7 +74,7 @@ export default function Home() {
 
       return nextState.files[0]?.id ?? "";
     });
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -124,7 +126,7 @@ export default function Home() {
     setIsUploading(false);
 
     if (response.status === 401) {
-      window.location.href = "/login";
+      router.push("/login");
       return;
     }
 
@@ -146,7 +148,7 @@ export default function Home() {
       body: JSON.stringify({ fileId }),
     });
     if (response.status === 401) {
-      window.location.href = "/login";
+      router.push("/login");
       return;
     }
 
@@ -160,7 +162,7 @@ export default function Home() {
       body: JSON.stringify(patch),
     });
     if (response.status === 401) {
-      window.location.href = "/login";
+      router.push("/login");
       return;
     }
 
@@ -177,7 +179,7 @@ export default function Home() {
   async function resetDemoData() {
     const response = await fetch("/api/state", { method: "DELETE" });
     if (response.status === 401) {
-      window.location.href = "/login";
+      router.push("/login");
       return;
     }
 
@@ -187,7 +189,7 @@ export default function Home() {
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
-    window.location.href = "/login";
+    router.push("/login");
   }
 
   if (!authChecked) {

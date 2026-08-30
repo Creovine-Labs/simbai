@@ -21,6 +21,7 @@ gitignore-folder/
 npm-debug.log*
 yarn-debug.log*
 pnpm-debug.log*
+firebase-debug.log
 .npm-cache/
 
 # OS/editor
