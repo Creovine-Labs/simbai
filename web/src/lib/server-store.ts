@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import {
   FileAsset,
@@ -12,7 +13,10 @@ import {
   makeId,
 } from "@/lib/local-product";
 
-const DATA_DIR = path.join(process.cwd(), ".data");
+const DATA_DIR =
+  process.env.VERCEL === "1"
+    ? path.join(os.tmpdir(), "simbai-demo-data")
+    : path.join(process.cwd(), ".data");
 const STATE_FILE = path.join(DATA_DIR, "state.json");
 
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
