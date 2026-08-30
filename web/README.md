@@ -29,3 +29,12 @@ npm run start
 Local development uses server-side JSON storage at `.data/state.json`. It is intentionally not committed.
 
 When hosted on Vercel, the prototype uses a private Vercel Blob store for uploaded file content and shared state. The production direction is still Supabase Auth, PostgreSQL, Supabase Storage, and Vercel.
+
+The prototype includes signup/login routes:
+
+```text
+/signup
+/login
+```
+
+Dashboard data is scoped to the logged-in user.

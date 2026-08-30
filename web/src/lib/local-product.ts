@@ -2,6 +2,7 @@ export type FileKind = "pdf" | "image";
 
 export type FileAsset = {
   id: string;
+  ownerUserId?: string;
   name: string;
   type: string;
   kind: FileKind;
@@ -14,6 +15,7 @@ export type FileAsset = {
 
 export type ShareLink = {
   id: string;
+  ownerUserId?: string;
   fileId: string;
   token: string;
   title: string;
@@ -50,7 +52,26 @@ export type ViewerSession = {
   userAgent: string;
 };
 
+export type AppUser = {
+  id: string;
+  name: string;
+  email: string;
+  passwordHash: string;
+  passwordSalt: string;
+  createdAt: string;
+};
+
+export type AuthSession = {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  createdAt: string;
+  expiresAt: string;
+};
+
 export type LocalState = {
+  users: AppUser[];
+  authSessions: AuthSession[];
   files: FileAsset[];
   links: ShareLink[];
   events: TrackingEvent[];
@@ -59,6 +80,8 @@ export type LocalState = {
 
 export function emptyState(): LocalState {
   return {
+    users: [],
+    authSessions: [],
     files: [],
     links: [],
     events: [],

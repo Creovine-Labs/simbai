@@ -12,8 +12,16 @@ import {
 
 const MAX_LOCAL_FILE_SIZE = 25 * 1024 * 1024;
 
+type PublicUser = {
+  id: string;
+  name: string;
+  email: string;
+};
+
 export default function Home() {
   const [state, setState] = useState<LocalState>(emptyState());
+  const [user, setUser] = useState<PublicUser | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [selectedFileId, setSelectedFileId] = useState("");
   const [uploadError, setUploadError] = useState("");
   const [copiedToken, setCopiedToken] = useState("");
@@ -41,9 +49,18 @@ export default function Home() {
   }, [state]);
 
   const loadState = useCallback(async (options?: { preserveSelection?: boolean }) => {
-    const response = await fetch("/api/state");
-    const nextState = (await response.json()) as LocalState;
+    const response = await fetch("/api/auth/me");
+    const payload = await response.json();
+
+    if (!response.ok || !payload.user) {
+      window.location.href = "/login";
+      return;
+    }
+
+    const nextState = payload.state as LocalState;
+    setUser(payload.user as PublicUser);
     setState(nextState);
+    setAuthChecked(true);
     setSelectedFileId((current) => {
       if (
         options?.preserveSelection &&
@@ -106,6 +123,11 @@ export default function Home() {
     const payload = await response.json();
     setIsUploading(false);
 
+    if (response.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+
     if (!response.ok) {
       setUploadError(payload.error ?? "Upload failed.");
     } else {
@@ -123,6 +145,11 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ fileId }),
     });
+    if (response.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+
     setState((await response.json()) as LocalState);
   }
 
@@ -132,6 +159,11 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     });
+    if (response.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+
     setState((await response.json()) as LocalState);
   }
 
@@ -144,8 +176,29 @@ export default function Home() {
 
   async function resetDemoData() {
     const response = await fetch("/api/state", { method: "DELETE" });
+    if (response.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+
     setState((await response.json()) as LocalState);
     setSelectedFileId("");
+  }
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    window.location.href = "/login";
+  }
+
+  if (!authChecked) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[#f6f3ee] text-[#1d2527]">
+        <section className="rounded-lg border border-[#d8d1c7] bg-white px-6 py-5 shadow-sm">
+          <p className="text-sm font-semibold text-[#35635b]">Simbai Share</p>
+          <p className="mt-2 text-sm text-[#68736f]">Checking your session...</p>
+        </section>
+      </main>
+    );
   }
 
   return (
@@ -166,6 +219,10 @@ export default function Home() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <div className="rounded-md border border-[#d8d1c7] bg-white px-3 py-2 text-sm">
+              <span className="block font-semibold">{user?.name}</span>
+              <span className="block text-xs text-[#68736f]">{user?.email}</span>
+            </div>
             <label className="inline-flex cursor-pointer items-center justify-center rounded-md bg-[#235a4f] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1b463e]">
               {isUploading ? "Uploading..." : "Upload files"}
               <input
@@ -177,6 +234,13 @@ export default function Home() {
                 onChange={handleUpload}
               />
             </label>
+            <button
+              className="rounded-md border border-[#c9c0b3] px-4 py-2 text-sm font-semibold text-[#33413e] transition hover:bg-white"
+              onClick={logout}
+              type="button"
+            >
+              Log out
+            </button>
             <button
               className="rounded-md border border-[#c9c0b3] px-4 py-2 text-sm font-semibold text-[#33413e] transition hover:bg-white"
               onClick={resetDemoData}

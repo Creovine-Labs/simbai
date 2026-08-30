@@ -64,10 +64,11 @@ export async function writeServerState(state: LocalState) {
   await writeFile(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
 }
 
-export async function resetServerState() {
+export async function resetServerState(userId?: string) {
   if (shouldUseVercelBlob()) {
     const currentState = await readServerState();
     const blobPaths = currentState.files
+      .filter((file) => !userId || file.ownerUserId === userId)
       .map((file) => file.blobPath)
       .filter((blobPath): blobPath is string => Boolean(blobPath));
 
@@ -76,12 +77,35 @@ export async function resetServerState() {
     }
   }
 
+  if (userId) {
+    const state = await readServerState();
+    const userFileIds = new Set(
+      state.files.filter((file) => file.ownerUserId === userId).map((file) => file.id),
+    );
+    const userLinkIds = new Set(
+      state.links
+        .filter((link) => link.ownerUserId === userId && userFileIds.has(link.fileId))
+        .map((link) => link.id),
+    );
+
+    const nextState = {
+      ...state,
+      files: state.files.filter((file) => file.ownerUserId !== userId),
+      links: state.links.filter((link) => !userLinkIds.has(link.id)),
+      sessions: state.sessions.filter((session) => !userLinkIds.has(session.linkId)),
+      events: state.events.filter((event) => !userLinkIds.has(event.linkId)),
+    };
+
+    await writeServerState(nextState);
+    return nextState;
+  }
+
   const state = emptyState();
   await writeServerState(state);
   return state;
 }
 
-export async function addUploadedFile(file: File) {
+export async function addUploadedFile(file: File, ownerUserId: string) {
   const kind = getFileKind(file.type);
   if (!kind) {
     throw new Error("Only PDF and image files are supported.");
@@ -104,6 +128,7 @@ export async function addUploadedFile(file: File) {
 
   const asset: FileAsset = {
     id,
+    ownerUserId,
     name: file.name,
     type: file.type,
     kind,
@@ -122,9 +147,11 @@ export async function addUploadedFile(file: File) {
   return nextState;
 }
 
-export async function createShareLink(fileId: string) {
+export async function createShareLink(fileId: string, ownerUserId: string) {
   const state = await readServerState();
-  const file = state.files.find((item) => item.id === fileId);
+  const file = state.files.find(
+    (item) => item.id === fileId && item.ownerUserId === ownerUserId,
+  );
 
   if (!file) {
     throw new Error("File not found.");
@@ -132,6 +159,7 @@ export async function createShareLink(fileId: string) {
 
   const link: ShareLink = {
     id: makeId("link"),
+    ownerUserId,
     fileId: file.id,
     token: makeId("share"),
     title: `${file.name} link`,
@@ -148,6 +176,7 @@ export async function createShareLink(fileId: string) {
 export async function updateShareLink(
   linkId: string,
   patch: Partial<ShareLink>,
+  ownerUserId: string,
 ) {
   const state = await readServerState();
   const allowedPatch: Partial<ShareLink> = {
@@ -161,7 +190,9 @@ export async function updateShareLink(
   const nextState = {
     ...state,
     links: state.links.map((link) =>
-      link.id === linkId ? { ...link, ...allowedPatch } : link,
+      link.id === linkId && link.ownerUserId === ownerUserId
+        ? { ...link, ...allowedPatch }
+        : link,
     ),
   };
 

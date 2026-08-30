@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
+import { filterStateForUser, requireCurrentUser } from "@/lib/auth-server";
 import { addUploadedFile } from "@/lib/server-store";
 
 export async function POST(request: Request) {
   try {
+    const user = await requireCurrentUser();
     const formData = await request.formData();
     const uploads = formData.getAll("files").filter((item) => item instanceof File);
 
@@ -12,10 +14,10 @@ export async function POST(request: Request) {
 
     let state;
     for (const file of uploads) {
-      state = await addUploadedFile(file);
+      state = await addUploadedFile(file, user.id);
     }
 
-    return NextResponse.json(state);
+    return NextResponse.json(filterStateForUser(state!, user.id));
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Upload failed." },

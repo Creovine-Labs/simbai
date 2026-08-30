@@ -8,6 +8,9 @@ This repository currently contains a local V1 prototype. It is designed for prod
 
 Implemented in local V1:
 
+- Signup and login
+- Password hashing and secure session cookies
+- User-owned dashboard files, links, sessions, and analytics
 - PDF and image uploads
 - Share-link creation
 - Public viewer route
@@ -76,6 +79,12 @@ web/.data/state.json
 That file is ignored by Git.
 
 The hosted Vercel demo stores uploaded file content and prototype state in a private Vercel Blob store. This is persistent across deployments, but it is still a prototype storage model. The production product direction remains Supabase Auth, PostgreSQL, and private object storage with real users/workspaces.
+
+## Accounts
+
+The current V1 includes self-contained prototype accounts. Users can sign up at `/signup`, log in at `/login`, and manage only their own uploaded files and share links.
+
+Passwords are hashed before storage and sessions are stored in HTTP-only cookies. This is suitable for testing the product flow, but the planned production auth layer is still Supabase Auth.
 
 ## Roadmap
 
