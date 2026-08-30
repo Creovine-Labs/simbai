@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { get, put } from "@vercel/blob";
 import {
   FileAsset,
   LocalState,
@@ -13,6 +14,7 @@ import {
   makeId,
 } from "@/lib/local-product";
 
+const STATE_BLOB_PATH = "state/state.json";
 const DATA_DIR =
   process.env.VERCEL === "1"
     ? path.join(os.tmpdir(), "simbai-demo-data")
@@ -22,6 +24,24 @@ const STATE_FILE = path.join(DATA_DIR, "state.json");
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 export async function readServerState(): Promise<LocalState> {
+  if (shouldUseVercelBlob()) {
+    try {
+      const result = await get(STATE_BLOB_PATH, {
+        access: "private",
+        useCache: false,
+      });
+
+      if (!result || result.statusCode === 304 || !result.stream) {
+        return emptyState();
+      }
+
+      const raw = await new Response(result.stream).text();
+      return { ...emptyState(), ...JSON.parse(raw) } as LocalState;
+    } catch {
+      return emptyState();
+    }
+  }
+
   try {
     const raw = await readFile(STATE_FILE, "utf8");
     return { ...emptyState(), ...JSON.parse(raw) } as LocalState;
@@ -31,6 +51,15 @@ export async function readServerState(): Promise<LocalState> {
 }
 
 export async function writeServerState(state: LocalState) {
+  if (shouldUseVercelBlob()) {
+    await put(STATE_BLOB_PATH, JSON.stringify(state, null, 2), {
+      access: "private",
+      allowOverwrite: true,
+      contentType: "application/json",
+    });
+    return;
+  }
+
   await mkdir(DATA_DIR, { recursive: true });
   await writeFile(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
 }
@@ -52,13 +81,26 @@ export async function addUploadedFile(file: File) {
   }
 
   const bytes = Buffer.from(await file.arrayBuffer());
+  const id = makeId("file");
+  const blobPath = `files/${id}-${safeBlobName(file.name)}`;
+
+  if (shouldUseVercelBlob()) {
+    await put(blobPath, bytes, {
+      access: "private",
+      contentType: file.type,
+    });
+  }
+
   const asset: FileAsset = {
-    id: makeId("file"),
+    id,
     name: file.name,
     type: file.type,
     kind,
     size: file.size,
-    dataUrl: `data:${file.type};base64,${bytes.toString("base64")}`,
+    dataUrl: shouldUseVercelBlob()
+      ? undefined
+      : `data:${file.type};base64,${bytes.toString("base64")}`,
+    blobPath: shouldUseVercelBlob() ? blobPath : undefined,
     pageCount: kind === "pdf" ? countPdfPages(bytes) : 1,
     createdAt: new Date().toISOString(),
   };
@@ -219,6 +261,54 @@ export function validateShareLink(state: LocalState, token: string) {
   }
 
   return { ok: true as const, link, file };
+}
+
+export async function readFileContent(fileId: string) {
+  const state = await readServerState();
+  const file = state.files.find((item) => item.id === fileId);
+
+  if (!file) {
+    return null;
+  }
+
+  if (file.blobPath && shouldUseVercelBlob()) {
+    const result = await get(file.blobPath, {
+      access: "private",
+      useCache: false,
+    });
+
+    if (!result || result.statusCode === 304 || !result.stream) {
+      return null;
+    }
+
+    return {
+      stream: result.stream,
+      contentType: result.blob.contentType || file.type,
+      filename: file.name,
+    };
+  }
+
+  if (file.dataUrl) {
+    const [metadata, base64] = file.dataUrl.split(",");
+    const contentType = metadata.match(/^data:(.*);base64$/)?.[1] ?? file.type;
+    const body = Buffer.from(base64 ?? "", "base64");
+
+    return {
+      stream: body,
+      contentType,
+      filename: file.name,
+    };
+  }
+
+  return null;
+}
+
+function shouldUseVercelBlob() {
+  return process.env.VERCEL === "1";
+}
+
+function safeBlobName(name: string) {
+  return name.replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 120);
 }
 
 function countPdfPages(bytes: Buffer) {

@@ -15,6 +15,7 @@ web/.data/
 # env and secrets
 .env*
 web/.env*
+gitignore-folder/
 
 # logs
 npm-debug.log*

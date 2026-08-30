@@ -26,4 +26,6 @@ npm run start
 
 ## Notes
 
-The current prototype uses local server-side JSON storage at `.data/state.json`. It is intentionally not committed. The production direction is Supabase Auth, PostgreSQL, Supabase Storage, and Vercel.
+Local development uses server-side JSON storage at `.data/state.json`. It is intentionally not committed.
+
+When hosted on Vercel, the prototype uses a private Vercel Blob store for uploaded file content and shared state. The production direction is still Supabase Auth, PostgreSQL, Supabase Storage, and Vercel.

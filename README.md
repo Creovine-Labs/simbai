@@ -19,6 +19,7 @@ Implemented in local V1:
 - Download click tracking
 - Dashboard analytics summary and activity feed
 - Local server-side JSON storage for demo data
+- Vercel Blob storage for hosted demo state and uploaded file content
 
 ## Project Structure
 
@@ -66,13 +67,15 @@ npm run build
 
 ## Local Data
 
-Local V1 stores prototype files, links, sessions, and events in:
+Local development stores prototype files, links, sessions, and events in:
 
 ```text
 web/.data/state.json
 ```
 
 That file is ignored by Git.
+
+The hosted Vercel demo stores uploaded file content and prototype state in a private Vercel Blob store. This is persistent across deployments, but it is still a prototype storage model. The production product direction remains Supabase Auth, PostgreSQL, and private object storage with real users/workspaces.
 
 ## Roadmap
 

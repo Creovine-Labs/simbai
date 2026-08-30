@@ -6,7 +6,8 @@ export type FileAsset = {
   type: string;
   kind: FileKind;
   size: number;
-  dataUrl: string;
+  dataUrl?: string;
+  blobPath?: string;
   pageCount: number;
   createdAt: string;
 };

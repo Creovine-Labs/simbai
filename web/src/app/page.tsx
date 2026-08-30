@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   LocalState,
   ShareLink,
@@ -18,20 +18,6 @@ export default function Home() {
   const [uploadError, setUploadError] = useState("");
   const [copiedToken, setCopiedToken] = useState("");
   const [isUploading, setIsUploading] = useState(false);
-
-  useEffect(() => {
-    queueMicrotask(() => {
-      void loadState();
-    });
-  }, []);
-
-  useEffect(() => {
-    const refresh = window.setInterval(() => {
-      void loadState({ preserveSelection: true });
-    }, 2500);
-
-    return () => window.clearInterval(refresh);
-  }, [selectedFileId]);
 
   const selectedFile = state.files.find((file) => file.id === selectedFileId);
   const selectedLinks = state.links.filter(
@@ -54,7 +40,7 @@ export default function Home() {
     };
   }, [state]);
 
-  async function loadState(options?: { preserveSelection?: boolean }) {
+  const loadState = useCallback(async (options?: { preserveSelection?: boolean }) => {
     const response = await fetch("/api/state");
     const nextState = (await response.json()) as LocalState;
     setState(nextState);
@@ -69,7 +55,21 @@ export default function Home() {
 
       return nextState.files[0]?.id ?? "";
     });
-  }
+  }, []);
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      void loadState();
+    });
+  }, [loadState]);
+
+  useEffect(() => {
+    const refresh = window.setInterval(() => {
+      void loadState({ preserveSelection: true });
+    }, 2500);
+
+    return () => window.clearInterval(refresh);
+  }, [loadState, selectedFileId]);
 
   async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
     setUploadError("");

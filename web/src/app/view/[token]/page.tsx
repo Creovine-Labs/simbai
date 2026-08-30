@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileAsset, ShareLink, ViewerSession } from "@/lib/local-product";
 
 type ViewerState =
@@ -23,72 +23,25 @@ export default function ShareViewer() {
   const [activePage, setActivePage] = useState(1);
   const openedEventRecorded = useRef(false);
 
-  useEffect(() => {
-    queueMicrotask(() => {
-      void createSession();
-    });
-  }, []);
-
-  const requiresPassword =
-    viewer.status === "ready" && viewer.link.password && !passwordAccepted;
-
-  useEffect(() => {
-    if (viewer.status !== "ready" || requiresPassword || openedEventRecorded.current) {
-      return;
-    }
-
-    openedEventRecorded.current = true;
-    void recordEvent({
-      linkId: viewer.link.id,
-      fileId: viewer.file.id,
-      sessionId: viewer.session.id,
-      eventType: "link_opened",
-      pageNumber: activePage,
-    });
-  }, [viewer, requiresPassword, activePage]);
-
-  useEffect(() => {
-    if (viewer.status !== "ready" || requiresPassword) return;
-
-    const heartbeat = window.setInterval(() => {
-      void recordEvent({
-        linkId: viewer.link.id,
-        fileId: viewer.file.id,
-        sessionId: viewer.session.id,
-        eventType: "page_viewed",
-        pageNumber: activePage,
-        metadata: { heartbeat: true },
+  const recordEvent = useCallback(
+    async (event: {
+      linkId: string;
+      fileId: string;
+      sessionId: string;
+      eventType: string;
+      pageNumber?: number;
+      metadata?: Record<string, string | number | boolean>;
+    }) => {
+      await fetch("/api/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(event),
       });
-    }, 8000);
+    },
+    [],
+  );
 
-    return () => window.clearInterval(heartbeat);
-  }, [activePage, requiresPassword, viewer]);
-
-  useEffect(() => {
-    if (viewer.status !== "ready") return;
-
-    const revalidate = window.setInterval(async () => {
-      const response = await fetch(`/api/share/${params.token}`);
-      const payload = await response.json();
-
-      if (!response.ok || !payload.ok) {
-        setViewer({
-          status: "blocked",
-          reason: payload.reason ?? "This share link is no longer available.",
-        });
-      } else {
-        setViewer((current) =>
-          current.status === "ready"
-            ? { ...current, link: payload.link, file: payload.file }
-            : current,
-        );
-      }
-    }, 5000);
-
-    return () => window.clearInterval(revalidate);
-  }, [params.token, viewer.status]);
-
-  async function createSession() {
+  const createSession = useCallback(async () => {
     const response = await fetch("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -114,22 +67,72 @@ export default function ShareViewer() {
       file: payload.file,
       session: payload.session,
     });
-  }
+  }, [params.token]);
 
-  async function recordEvent(event: {
-    linkId: string;
-    fileId: string;
-    sessionId: string;
-    eventType: string;
-    pageNumber?: number;
-    metadata?: Record<string, string | number | boolean>;
-  }) {
-    await fetch("/api/events", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(event),
+  useEffect(() => {
+    queueMicrotask(() => {
+      void createSession();
     });
-  }
+  }, [createSession]);
+
+  const requiresPassword =
+    viewer.status === "ready" && viewer.link.password && !passwordAccepted;
+
+  useEffect(() => {
+    if (viewer.status !== "ready" || requiresPassword || openedEventRecorded.current) {
+      return;
+    }
+
+    openedEventRecorded.current = true;
+    void recordEvent({
+      linkId: viewer.link.id,
+      fileId: viewer.file.id,
+      sessionId: viewer.session.id,
+      eventType: "link_opened",
+      pageNumber: activePage,
+    });
+  }, [viewer, requiresPassword, activePage, recordEvent]);
+
+  useEffect(() => {
+    if (viewer.status !== "ready" || requiresPassword) return;
+
+    const heartbeat = window.setInterval(() => {
+      void recordEvent({
+        linkId: viewer.link.id,
+        fileId: viewer.file.id,
+        sessionId: viewer.session.id,
+        eventType: "page_viewed",
+        pageNumber: activePage,
+        metadata: { heartbeat: true },
+      });
+    }, 8000);
+
+    return () => window.clearInterval(heartbeat);
+  }, [activePage, requiresPassword, viewer, recordEvent]);
+
+  useEffect(() => {
+    if (viewer.status !== "ready") return;
+
+    const revalidate = window.setInterval(async () => {
+      const response = await fetch(`/api/share/${params.token}`);
+      const payload = await response.json();
+
+      if (!response.ok || !payload.ok) {
+        setViewer({
+          status: "blocked",
+          reason: payload.reason ?? "This share link is no longer available.",
+        });
+      } else {
+        setViewer((current) =>
+          current.status === "ready"
+            ? { ...current, link: payload.link, file: payload.file }
+            : current,
+        );
+      }
+    }, 5000);
+
+    return () => window.clearInterval(revalidate);
+  }, [params.token, viewer.status]);
 
   function submitPassword() {
     if (viewer.status !== "ready") return;
@@ -161,8 +164,8 @@ export default function ShareViewer() {
 
   const pdfSrc = useMemo(() => {
     if (viewer.status !== "ready" || viewer.file.kind !== "pdf") return "";
-    return `${viewer.file.dataUrl}#page=${activePage}&toolbar=0`;
-  }, [activePage, viewer]);
+    return `${fileContentUrl(viewer.file.id, params.token)}#page=${activePage}&toolbar=0`;
+  }, [activePage, params.token, viewer]);
 
   if (viewer.status === "loading") {
     return <Shell title="Opening secure link">Loading viewer...</Shell>;
@@ -230,7 +233,7 @@ export default function ShareViewer() {
               <a
                 className="rounded-md bg-[#235a4f] px-4 py-2 text-sm font-semibold text-white"
                 download={viewer.file.name}
-                href={viewer.file.dataUrl}
+                href={fileContentUrl(viewer.file.id, params.token)}
                 onClick={trackDownload}
               >
                 Download
@@ -280,7 +283,7 @@ export default function ShareViewer() {
             <img
               alt={viewer.file.name}
               className="mx-auto max-h-[78vh] w-auto max-w-full object-contain"
-              src={viewer.file.dataUrl}
+              src={fileContentUrl(viewer.file.id, params.token)}
             />
           ) : (
             <iframe
@@ -293,6 +296,10 @@ export default function ShareViewer() {
       </section>
     </main>
   );
+}
+
+function fileContentUrl(fileId: string, token: string) {
+  return `/api/files/${fileId}/content?token=${encodeURIComponent(token)}`;
 }
 
 function Shell({
