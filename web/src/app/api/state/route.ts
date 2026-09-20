@@ -1,21 +1,29 @@
 import { NextResponse } from "next/server";
-import { filterStateForUser, requireCurrentUser } from "@/lib/auth-server";
+import { requireCurrentUser } from "@/lib/auth-server";
+import { filterStateForUser } from "@/lib/state-access";
 import { readServerState, resetServerState } from "@/lib/server-store";
+import { NO_STORE, errorResponse } from "@/lib/api";
 
 export async function GET() {
   try {
     const user = await requireCurrentUser();
-    return NextResponse.json(filterStateForUser(await readServerState(), user.id));
-  } catch {
-    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+    const state = await readServerState();
+    return NextResponse.json(filterStateForUser(state, user.id), {
+      headers: NO_STORE,
+    });
+  } catch (error) {
+    return errorResponse(error, "Could not read workspace.");
   }
 }
 
 export async function DELETE() {
   try {
     const user = await requireCurrentUser();
-    return NextResponse.json(filterStateForUser(await resetServerState(user.id), user.id));
-  } catch {
-    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+    const state = await resetServerState(user.id);
+    return NextResponse.json(filterStateForUser(state, user.id), {
+      headers: NO_STORE,
+    });
+  } catch (error) {
+    return errorResponse(error, "Could not reset workspace.");
   }
 }

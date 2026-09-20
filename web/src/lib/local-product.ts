@@ -7,6 +7,9 @@ export type FileAsset = {
   type: string;
   kind: FileKind;
   size: number;
+  /** Key inside the active content store (Vercel Blob, or `.data/` on disk). */
+  storagePath?: string;
+  /** Legacy fields kept so state written by earlier builds still resolves. */
   dataUrl?: string;
   blobPath?: string;
   pageCount: number;
@@ -26,20 +29,38 @@ export type ShareLink = {
   createdAt: string;
 };
 
+/** A link as the viewer is allowed to see it: never carries the password. */
+export type PublicShareLink = Omit<ShareLink, "password" | "ownerUserId"> & {
+  passwordRequired: boolean;
+};
+
+export type ViewerEventType =
+  | "link_opened"
+  | "viewer_started"
+  | "page_viewed"
+  | "download_clicked"
+  | "viewer_closed"
+  | "link_blocked";
+
+/** Event types a viewer client is allowed to report. The rest are server-issued. */
+export const CLIENT_EVENT_TYPES = [
+  "page_viewed",
+  "download_clicked",
+  "viewer_closed",
+] as const satisfies readonly ViewerEventType[];
+
+export type ClientEventType = (typeof CLIENT_EVENT_TYPES)[number];
+
+export type EventMetadata = Record<string, string | number | boolean>;
+
 export type TrackingEvent = {
   id: string;
   linkId: string;
   fileId: string;
   sessionId: string;
-  eventType:
-    | "link_opened"
-    | "viewer_started"
-    | "page_viewed"
-    | "download_clicked"
-    | "viewer_closed"
-    | "link_blocked";
+  eventType: ViewerEventType;
   pageNumber?: number;
-  metadata?: Record<string, string | number | boolean>;
+  metadata?: EventMetadata;
   occurredAt: string;
 };
 
@@ -50,17 +71,17 @@ export type ViewerSession = {
   startedAt: string;
   lastSeenAt: string;
   userAgent: string;
+  /** Password in force when access was granted; a change revokes this session. */
+  passwordFingerprint: string;
 };
 
 export type AppUser = {
   id: string;
-  firebaseUid?: string;
+  firebaseUid: string;
   name: string;
   email: string;
-  authProvider?: "firebase" | "password";
+  emailVerified: boolean;
   avatarUrl?: string;
-  passwordHash?: string;
-  passwordSalt?: string;
   createdAt: string;
   updatedAt?: string;
 };
@@ -82,6 +103,11 @@ export type LocalState = {
   sessions: ViewerSession[];
 };
 
+/** Events retained per link. Older ones are dropped as new ones arrive. */
+export const MAX_EVENTS_PER_LINK = 500;
+export const MAX_TITLE_LENGTH = 200;
+export const MAX_PASSWORD_LENGTH = 200;
+
 export function emptyState(): LocalState {
   return {
     users: [],
@@ -94,12 +120,7 @@ export function emptyState(): LocalState {
 }
 
 export function makeId(prefix: string) {
-  const random =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : Math.random().toString(36).slice(2);
-
-  return `${prefix}_${random.replaceAll("-", "").slice(0, 16)}`;
+  return `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
 }
 
 export function formatBytes(bytes: number) {
@@ -111,12 +132,120 @@ export function formatBytes(bytes: number) {
 
 export function getFileKind(type: string): FileKind | null {
   if (type === "application/pdf") return "pdf";
+  // SVG is an active document, not a picture: it is never an accepted kind.
+  if (type === "image/svg+xml") return null;
   if (type.startsWith("image/")) return "image";
   return null;
 }
 
-export function isExpired(link: ShareLink) {
-  return Boolean(link.expiresAt && new Date(link.expiresAt) < new Date());
+export function isExpired(link: Pick<ShareLink, "expiresAt">, now = new Date()) {
+  return Boolean(link.expiresAt && new Date(link.expiresAt) < now);
+}
+
+/** Strips the password and owner before a link is sent to a viewer. */
+export function publicLink(link: ShareLink): PublicShareLink {
+  return {
+    id: link.id,
+    fileId: link.fileId,
+    token: link.token,
+    title: link.title,
+    enabled: link.enabled,
+    expiresAt: link.expiresAt,
+    allowDownload: link.allowDownload,
+    createdAt: link.createdAt,
+    passwordRequired: Boolean(link.password),
+  };
+}
+
+export type LinkPatch = {
+  title?: string;
+  enabled?: boolean;
+  password?: string | null;
+  expiresAt?: string | null;
+  allowDownload?: boolean;
+};
+
+/**
+ * Applies only the keys the caller actually sent. An absent key leaves the
+ * current value alone; an explicit `null` clears the optional ones.
+ */
+export function applyLinkPatch(link: ShareLink, patch: unknown): ShareLink {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+    throw new Error("Link update must be an object.");
+  }
+
+  const input = patch as Record<string, unknown>;
+  const next: ShareLink = { ...link };
+
+  if ("title" in input) {
+    if (typeof input.title !== "string") {
+      throw new Error("Link title must be text.");
+    }
+    const title = input.title.trim().slice(0, MAX_TITLE_LENGTH);
+    if (!title) {
+      throw new Error("Link title cannot be empty.");
+    }
+    next.title = title;
+  }
+
+  if ("enabled" in input) {
+    if (typeof input.enabled !== "boolean") {
+      throw new Error("Link enabled must be true or false.");
+    }
+    next.enabled = input.enabled;
+  }
+
+  if ("allowDownload" in input) {
+    if (typeof input.allowDownload !== "boolean") {
+      throw new Error("Link allowDownload must be true or false.");
+    }
+    next.allowDownload = input.allowDownload;
+  }
+
+  if ("password" in input) {
+    if (input.password === null || input.password === "") {
+      delete next.password;
+    } else if (typeof input.password === "string") {
+      next.password = input.password.slice(0, MAX_PASSWORD_LENGTH);
+    } else {
+      throw new Error("Link password must be text or null.");
+    }
+  }
+
+  if ("expiresAt" in input) {
+    if (input.expiresAt === null || input.expiresAt === "") {
+      delete next.expiresAt;
+    } else if (typeof input.expiresAt === "string") {
+      const parsed = new Date(input.expiresAt);
+      if (Number.isNaN(parsed.getTime())) {
+        throw new Error("Link expiry is not a valid date.");
+      }
+      // Always persisted as UTC so the server and browser agree on the instant.
+      next.expiresAt = parsed.toISOString();
+    } else {
+      throw new Error("Link expiry must be a date string or null.");
+    }
+  }
+
+  return next;
+}
+
+/** `datetime-local` has no zone, so it is read and written as local wall time. */
+export function toDateTimeLocalValue(iso: string | undefined) {
+  const date = iso ? new Date(iso) : null;
+  if (!date || Number.isNaN(date.getTime())) return "";
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  );
+}
+
+export function fromDateTimeLocalValue(value: string): string | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
 }
 
 export function summarizeLink(link: ShareLink, state: LocalState) {

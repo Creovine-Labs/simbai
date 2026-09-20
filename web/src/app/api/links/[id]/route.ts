@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
-import { filterStateForUser, requireCurrentUser } from "@/lib/auth-server";
+import { requireCurrentUser } from "@/lib/auth-server";
+import { filterStateForUser } from "@/lib/state-access";
 import { updateShareLink } from "@/lib/server-store";
+import { NO_STORE, errorResponse } from "@/lib/api";
 
 export async function PATCH(
   request: Request,
@@ -10,11 +12,10 @@ export async function PATCH(
     const user = await requireCurrentUser();
     const { id } = await context.params;
     const state = await updateShareLink(id, await request.json(), user.id);
-    return NextResponse.json(filterStateForUser(state, user.id));
+    return NextResponse.json(filterStateForUser(state, user.id), {
+      headers: NO_STORE,
+    });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Could not update link." },
-      { status: 400 },
-    );
+    return errorResponse(error, "Could not update link.");
   }
 }

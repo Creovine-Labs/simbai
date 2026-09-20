@@ -37,6 +37,12 @@ yarn-error.log*
 # vercel
 .vercel
 
+# local prototype storage (state file + uploaded bytes)
+/.data
+
+# browser automation output
+/.playwright-mcp
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

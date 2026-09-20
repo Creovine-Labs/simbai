@@ -1,12 +1,25 @@
 import { NextResponse } from "next/server";
-import { readServerState, validateShareLink } from "@/lib/server-store";
+import { readShareSnapshot } from "@/lib/server-store";
+import { clientKey, rateLimit } from "@/lib/rate-limit";
+import { NO_STORE } from "@/lib/api";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ token: string }> },
 ) {
+  const limit = rateLimit(clientKey(request, "share"), 120, 60_000);
+  if (!limit.ok) {
+    return NextResponse.json(
+      { ok: false, reason: "Too many requests." },
+      { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds) } },
+    );
+  }
+
   const { token } = await context.params;
-  const state = await readServerState();
-  const validation = validateShareLink(state, token);
-  return NextResponse.json(validation, { status: validation.ok ? 200 : 403 });
+  const snapshot = await readShareSnapshot(token);
+
+  return NextResponse.json(snapshot, {
+    status: snapshot.ok ? 200 : 403,
+    headers: NO_STORE,
+  });
 }
