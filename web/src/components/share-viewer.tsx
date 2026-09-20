@@ -61,6 +61,15 @@ export function ShareViewer() {
         }),
       });
 
+      // Our own server is struggling; the link itself is fine.
+      if (response.status >= 500) {
+        return {
+          status: "blocked",
+          reason:
+            "This document is temporarily unavailable. Please try again in a few minutes.",
+        };
+      }
+
       const payload = await response.json().catch(() => ({}));
 
       if (!response.ok || !payload.ok) {

@@ -8,6 +8,7 @@ import {
   resolveViewerGrant,
 } from "@/lib/server-store";
 import { contentDisposition } from "@/lib/file-type";
+import { errorResponse } from "@/lib/api";
 import type { FileAsset } from "@/lib/local-product";
 
 type Access = { file: FileAsset; allowDownload: boolean };
@@ -45,7 +46,15 @@ export async function GET(
   context: { params: Promise<{ id: string }> },
 ) {
   const { id } = await context.params;
-  const access = await authorize(request, id);
+
+  let access: Access | null;
+  try {
+    access = await authorize(request, id);
+  } catch (error) {
+    // Without this a store outage would look like a revoked grant.
+    return errorResponse(error, "This file is unavailable right now.");
+  }
+
 
   if (!access) {
     return NextResponse.json(

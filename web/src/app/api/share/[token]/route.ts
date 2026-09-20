@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { readShareSnapshot } from "@/lib/server-store";
 import { clientKey, rateLimit } from "@/lib/rate-limit";
-import { NO_STORE } from "@/lib/api";
+import { NO_STORE, errorResponse } from "@/lib/api";
 
 export async function GET(
   request: Request,
@@ -16,10 +16,15 @@ export async function GET(
   }
 
   const { token } = await context.params;
-  const snapshot = await readShareSnapshot(token);
 
-  return NextResponse.json(snapshot, {
-    status: snapshot.ok ? 200 : 403,
-    headers: NO_STORE,
-  });
+  try {
+    const snapshot = await readShareSnapshot(token);
+    return NextResponse.json(snapshot, {
+      status: snapshot.ok ? 200 : 403,
+      headers: NO_STORE,
+    });
+  } catch (error) {
+    // A store outage must not read as "this link does not exist".
+    return errorResponse(error, "Could not open this link right now.");
+  }
 }

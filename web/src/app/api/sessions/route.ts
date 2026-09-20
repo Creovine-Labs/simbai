@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { readViewerGrant, setViewerGrant } from "@/lib/auth-server";
 import { openViewerSession, touchViewerSession } from "@/lib/server-store";
 import { clientKey, rateLimit } from "@/lib/rate-limit";
-import { NO_STORE } from "@/lib/api";
+import { NO_STORE, errorResponse } from "@/lib/api";
 
 export async function POST(request: Request) {
   const body = (await request.json()) as {
@@ -25,24 +25,28 @@ export async function POST(request: Request) {
     );
   }
 
-  const result = await openViewerSession({
-    token: body.token,
-    password: typeof body.password === "string" ? body.password : undefined,
-    userAgent:
-      typeof body.userAgent === "string"
-        ? body.userAgent
-        : request.headers.get("user-agent") ?? "",
-    viewport: typeof body.viewport === "string" ? body.viewport : "",
-  });
+  try {
+    const result = await openViewerSession({
+      token: body.token,
+      password: typeof body.password === "string" ? body.password : undefined,
+      userAgent:
+        typeof body.userAgent === "string"
+          ? body.userAgent
+          : request.headers.get("user-agent") ?? "",
+      viewport: typeof body.viewport === "string" ? body.viewport : "",
+    });
 
-  if (result.ok) {
-    await setViewerGrant(body.token, result.session.id);
+    if (result.ok) {
+      await setViewerGrant(body.token, result.session.id);
+    }
+
+    return NextResponse.json(result, {
+      status: result.ok ? 200 : 403,
+      headers: NO_STORE,
+    });
+  } catch (error) {
+    return errorResponse(error, "Could not open this link right now.");
   }
-
-  return NextResponse.json(result, {
-    status: result.ok ? 200 : 403,
-    headers: NO_STORE,
-  });
 }
 
 /** Presence ping. Keeps "viewing now" current without recording an event. */
@@ -58,6 +62,10 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ ok: false }, { status: 403, headers: NO_STORE });
   }
 
-  const ok = await touchViewerSession(body.token, sessionId);
-  return NextResponse.json({ ok }, { status: ok ? 200 : 403, headers: NO_STORE });
+  try {
+    const ok = await touchViewerSession(body.token, sessionId);
+    return NextResponse.json({ ok }, { status: ok ? 200 : 403, headers: NO_STORE });
+  } catch (error) {
+    return errorResponse(error, "Could not record presence.");
+  }
 }
