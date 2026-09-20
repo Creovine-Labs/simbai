@@ -49,3 +49,17 @@ export function UploadIcon({ className = "h-4 w-4" }: IconProps) {
     </svg>
   );
 }
+
+export function EyeIcon({ className = "h-4 w-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 22 22" fill="none" aria-hidden="true" className={`${base} ${className}`}>
+      <path
+        d="M1.8 11S4.9 5.2 11 5.2 20.2 11 20.2 11 17.1 16.8 11 16.8 1.8 11 1.8 11Z"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="11" cy="11" r="2.6" strokeWidth="1.5" />
+    </svg>
+  );
+}

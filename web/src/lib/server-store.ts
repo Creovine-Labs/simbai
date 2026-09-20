@@ -3,14 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { del, get, put } from "@vercel/blob";
 import {
+  MAX_AVATAR_BYTES,
   MAX_PASSWORD_LENGTH,
   applyLinkPatch,
   emptyState,
   isExpired,
   makeId,
+  normalizeDisplayName,
   publicLink,
 } from "./local-product";
 import type {
+  AppUser,
   ClientEventType,
   EventMetadata,
   FileAsset,
@@ -24,6 +27,7 @@ import { countPdfPages, sniffFileType } from "./file-type";
 import {
   normalizePageNumber,
   passwordFingerprint,
+  removeLinkCascade,
   trimEventsForLink,
   validateShareLink,
   verifyLinkPassword,
@@ -145,11 +149,7 @@ async function writeFileContent(storagePath: string, bytes: Buffer, type: string
   await writeFile(target, bytes);
 }
 
-async function deleteFileContent(files: FileAsset[]) {
-  const keys = files
-    .map((file) => file.storagePath ?? file.blobPath)
-    .filter((key): key is string => Boolean(key));
-
+async function deleteStoredKeys(keys: string[]) {
   if (keys.length === 0) return;
 
   if (shouldUseVercelBlob()) {
@@ -164,6 +164,37 @@ async function deleteFileContent(files: FileAsset[]) {
   );
 }
 
+async function deleteFileContent(files: FileAsset[]) {
+  await deleteStoredKeys(
+    files
+      .map((file) => file.storagePath ?? file.blobPath)
+      .filter((key): key is string => Boolean(key)),
+  );
+}
+
+/** Reads one stored object by key, whichever backend is active. */
+async function readStoredContent(
+  key: string,
+  contentType: string,
+  filename: string,
+): Promise<FileContent | null> {
+  if (shouldUseVercelBlob()) {
+    const result = await get(key, { access: "private", useCache: false });
+    if (!result || result.statusCode === 304 || !result.stream) return null;
+    return { body: result.stream, contentType, filename };
+  }
+
+  try {
+    return {
+      body: new Uint8Array(await readFile(localPathFor(key))),
+      contentType,
+      filename,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export type FileContent = {
   body: ReadableStream<Uint8Array> | Uint8Array<ArrayBuffer>;
   contentType: string;
@@ -175,28 +206,9 @@ export async function readFileContent(
 ): Promise<FileContent | null> {
   const key = file.storagePath ?? file.blobPath;
 
-  if (key && shouldUseVercelBlob()) {
-    const result = await get(key, { access: "private", useCache: false });
-    if (!result || result.statusCode === 304 || !result.stream) return null;
-
-    return {
-      body: result.stream,
-      // The stored type was sniffed at upload; never trust the store's echo.
-      contentType: file.type,
-      filename: file.name,
-    };
-  }
-
-  if (key && !shouldUseVercelBlob()) {
-    try {
-      return {
-        body: new Uint8Array(await readFile(localPathFor(key))),
-        contentType: file.type,
-        filename: file.name,
-      };
-    } catch {
-      return null;
-    }
+  if (key) {
+    // The type was sniffed at upload; never trust what the store echoes back.
+    return readStoredContent(key, file.type, file.name);
   }
 
   // Written by earlier builds that inlined bytes into the state file.
@@ -329,6 +341,22 @@ export async function updateShareLink(
       ...state,
       links: state.links.map((link) => (link.id === linkId ? updated : link)),
     };
+    return [next, next];
+  });
+}
+
+/** Removes a link along with the sessions and events that belong to it. */
+export async function deleteShareLink(linkId: string, ownerUserId: string) {
+  return mutateState((state) => {
+    const existing = state.links.find(
+      (link) => link.id === linkId && link.ownerUserId === ownerUserId,
+    );
+
+    if (!existing) {
+      throw new Error("Link not found.");
+    }
+
+    const next = removeLinkCascade(state, linkId);
     return [next, next];
   });
 }
@@ -611,6 +639,142 @@ export async function resetServerState(userId: string) {
   // a state row pointing at deleted bytes is not.
   await deleteFileContent(doomed.userFiles);
   return doomed.next;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Owner access                                                               */
+/* -------------------------------------------------------------------------- */
+
+/** Lets an owner read their own file without minting a viewer grant. */
+export async function findOwnedFile(fileId: string, ownerUserId: string) {
+  const state = await readServerState();
+  return (
+    state.files.find(
+      (file) => file.id === fileId && file.ownerUserId === ownerUserId,
+    ) ?? null
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Profile                                                                    */
+/* -------------------------------------------------------------------------- */
+
+export async function updateUserName(userId: string, name: unknown) {
+  const displayName = normalizeDisplayName(name);
+
+  return mutateState<AppUser>((state) => {
+    const existing = state.users.find((user) => user.id === userId);
+    if (!existing) {
+      throw new Error("Account not found.");
+    }
+
+    const updated: AppUser = {
+      ...existing,
+      name: displayName,
+      // Remember the choice so the next sign-in does not revert it.
+      nameIsCustom: true,
+      updatedAt: new Date().toISOString(),
+    };
+
+    return [
+      {
+        ...state,
+        users: state.users.map((user) => (user.id === userId ? updated : user)),
+      },
+      updated,
+    ];
+  });
+}
+
+export async function setUserAvatar(userId: string, file: File) {
+  if (file.size > MAX_AVATAR_BYTES) {
+    throw new Error("Profile pictures must be 2 MB or smaller.");
+  }
+
+  const bytes = Buffer.from(await file.arrayBuffer());
+  if (bytes.byteLength > MAX_AVATAR_BYTES) {
+    throw new Error("Profile pictures must be 2 MB or smaller.");
+  }
+
+  const sniffed = sniffFileType(bytes);
+  if (!sniffed || sniffed.kind !== "image") {
+    throw new Error("Profile pictures must be a PNG, JPEG, GIF or WebP image.");
+  }
+
+  const storagePath = `avatars/${userId}-${makeId("img")}`;
+  await writeFileContent(storagePath, bytes, sniffed.contentType);
+
+  const { updated, previous } = await mutateState<{
+    updated: AppUser;
+    previous?: string;
+  }>((state) => {
+    const existing = state.users.find((user) => user.id === userId);
+    if (!existing) {
+      throw new Error("Account not found.");
+    }
+
+    const next: AppUser = {
+      ...existing,
+      avatarStoragePath: storagePath,
+      avatarContentType: sniffed.contentType,
+      updatedAt: new Date().toISOString(),
+    };
+
+    return [
+      {
+        ...state,
+        users: state.users.map((user) => (user.id === userId ? next : user)),
+      },
+      { updated: next, previous: existing.avatarStoragePath },
+    ];
+  });
+
+  // Drop the superseded picture only once the new one is committed.
+  if (previous && previous !== storagePath) {
+    await deleteStoredKeys([previous]);
+  }
+
+  return updated;
+}
+
+export async function removeUserAvatar(userId: string) {
+  const { updated, previous } = await mutateState<{
+    updated: AppUser;
+    previous?: string;
+  }>((state) => {
+    const existing = state.users.find((user) => user.id === userId);
+    if (!existing) {
+      throw new Error("Account not found.");
+    }
+
+    const next: AppUser = { ...existing, updatedAt: new Date().toISOString() };
+    delete next.avatarStoragePath;
+    delete next.avatarContentType;
+
+    return [
+      {
+        ...state,
+        users: state.users.map((user) => (user.id === userId ? next : user)),
+      },
+      { updated: next, previous: existing.avatarStoragePath },
+    ];
+  });
+
+  if (previous) {
+    await deleteStoredKeys([previous]);
+  }
+
+  return updated;
+}
+
+export async function readUserAvatar(user: AppUser): Promise<FileContent | null> {
+  if (!user.avatarStoragePath) return null;
+
+  return readStoredContent(
+    user.avatarStoragePath,
+    user.avatarContentType ?? "application/octet-stream",
+    "avatar",
+  );
 }
 
 export { isExpired, validateShareLink };

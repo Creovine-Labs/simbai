@@ -81,10 +81,32 @@ export type AppUser = {
   name: string;
   email: string;
   emailVerified: boolean;
+  /** Picture from the identity provider, refreshed on every sign-in. */
   avatarUrl?: string;
+  /** An uploaded picture, which takes precedence over the provider's. */
+  avatarStoragePath?: string;
+  avatarContentType?: string;
+  /** Set once the user edits their name, so sign-in stops overwriting it. */
+  nameIsCustom?: boolean;
   createdAt: string;
   updatedAt?: string;
 };
+
+export const MAX_NAME_LENGTH = 80;
+export const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
+
+export function normalizeDisplayName(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new Error("Name must be text.");
+  }
+
+  const name = value.trim().replace(/\s+/g, " ").slice(0, MAX_NAME_LENGTH);
+  if (!name) {
+    throw new Error("Name cannot be empty.");
+  }
+
+  return name;
+}
 
 export type AuthSession = {
   id: string;

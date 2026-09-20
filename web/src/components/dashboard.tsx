@@ -1,9 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChangeEvent, useCallback, useMemo, useState } from "react";
+import { ChangeEvent, useCallback, useMemo, useRef, useState } from "react";
+import { Avatar } from "@/components/avatar";
 import { Brand } from "@/components/brand";
-import { DocIcon, LinkIcon, UploadIcon } from "@/components/icons";
+import { DocIcon, EyeIcon, LinkIcon, UploadIcon } from "@/components/icons";
 import { Trace } from "@/components/trace";
 import { LivePulse, Pill } from "@/components/ui";
 import { useDebounced, useVisiblePolling } from "@/components/use-poll";
@@ -26,7 +28,37 @@ type PublicUser = {
   name: string;
   email: string;
   emailVerified: boolean;
+  avatarUrl?: string;
+  hasCustomAvatar: boolean;
 };
+
+/**
+ * A cheap fingerprint of everything the dashboard renders. Comparing it lets a
+ * poll that found no changes skip the state update entirely, so the page is not
+ * re-rendering under the user every few seconds while they scroll.
+ */
+function stateSignature(state: LocalState) {
+  return [
+    state.files.length,
+    state.events.length,
+    state.sessions.length,
+    state.files[0]?.id ?? "",
+    state.events[0]?.id ?? "",
+    state.sessions.map((session) => session.lastSeenAt).join(","),
+    state.links
+      .map((link) =>
+        [
+          link.id,
+          link.title,
+          link.enabled,
+          link.allowDownload,
+          link.expiresAt ?? "",
+          link.password ?? "",
+        ].join(":"),
+      )
+      .join("|"),
+  ].join("~");
+}
 
 export function Dashboard() {
   const router = useRouter();
@@ -38,6 +70,18 @@ export function Dashboard() {
   const [copiedToken, setCopiedToken] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [isCreatingLink, setIsCreatingLink] = useState(false);
+  // The state above drives the label; this ref is the actual guard, because
+  // React state has not updated yet when a second click lands in the same tick.
+  const creatingLinkRef = useRef(false);
+  const signatureRef = useRef("");
+  /**
+   * Bumped around every write. A poll that was issued before a write landed is
+   * carrying older data than we already have, so its result is discarded
+   * instead of overwriting the UI — otherwise a freshly created link flickers
+   * away and looks like it was never made.
+   */
+  const writeGeneration = useRef(0);
 
   const selectedFile = state.files.find((file) => file.id === selectedFileId);
   const selectedLinks = state.links.filter((link) => link.fileId === selectedFileId);
@@ -72,6 +116,7 @@ export function Dashboard() {
   }, [router]);
 
   const loadState = useCallback(async () => {
+    const issuedAt = writeGeneration.current;
     const response = await fetch("/api/auth/me");
 
     if (response.status === 401) {
@@ -85,9 +130,36 @@ export function Dashboard() {
       return;
     }
 
+    // A write completed while this was in flight; its response is newer.
+    if (writeGeneration.current !== issuedAt) {
+      setAuthChecked(true);
+      return;
+    }
+
     const nextState = payload.state as LocalState;
-    setUser(payload.user as PublicUser);
-    setState(nextState);
+    const nextUser = payload.user as PublicUser;
+
+    // Every poll hands back a fresh object. Keeping the existing reference when
+    // nothing differs lets React bail out instead of re-rendering the page
+    // under the user — which is what made scrolling hitch every few seconds.
+    setUser((current) =>
+      current &&
+      current.id === nextUser.id &&
+      current.name === nextUser.name &&
+      current.email === nextUser.email &&
+      current.avatarUrl === nextUser.avatarUrl &&
+      current.emailVerified === nextUser.emailVerified &&
+      current.hasCustomAvatar === nextUser.hasCustomAvatar
+        ? current
+        : nextUser,
+    );
+
+    const signature = stateSignature(nextState);
+    if (signature !== signatureRef.current) {
+      signatureRef.current = signature;
+      setState(nextState);
+    }
+
     setAuthChecked(true);
     setSelectedFileId((current) =>
       current && nextState.files.some((file) => file.id === current)
@@ -111,6 +183,7 @@ export function Dashboard() {
     }
 
     setIsUploading(true);
+    writeGeneration.current += 1;
     try {
       const response = await fetch("/api/files", { method: "POST", body: formData });
 
@@ -126,6 +199,8 @@ export function Dashboard() {
       }
 
       const nextState = payload as LocalState;
+      writeGeneration.current += 1;
+      signatureRef.current = stateSignature(nextState);
       setState(nextState);
       setSelectedFileId(nextState.files[0]?.id ?? "");
     } finally {
@@ -135,6 +210,7 @@ export function Dashboard() {
 
   async function send(path: string, init: RequestInit) {
     setError("");
+    writeGeneration.current += 1;
     const response = await fetch(path, init);
 
     if (response.status === 401) {
@@ -150,15 +226,30 @@ export function Dashboard() {
       return;
     }
 
-    setState(payload as LocalState);
+    const nextState = payload as LocalState;
+    writeGeneration.current += 1;
+    signatureRef.current = stateSignature(nextState);
+    setState(nextState);
   }
 
-  const createShareLink = (fileId: string) =>
-    send("/api/links", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fileId }),
-    });
+  async function createShareLink(fileId: string) {
+    if (creatingLinkRef.current) return;
+    creatingLinkRef.current = true;
+    setIsCreatingLink(true);
+    try {
+      await send("/api/links", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileId }),
+      });
+    } finally {
+      creatingLinkRef.current = false;
+      setIsCreatingLink(false);
+    }
+  }
+
+  const deleteLink = (linkId: string) =>
+    send(`/api/links/${linkId}`, { method: "DELETE" });
 
   const updateLink = (linkId: string, patch: LinkPatch) =>
     send(`/api/links/${linkId}`, {
@@ -200,18 +291,22 @@ export function Dashboard() {
         <div className="mx-auto flex w-full max-w-7xl items-center gap-3 px-4 py-3 sm:px-6 lg:px-8">
           <Brand className="text-base" />
           <div className="ml-auto flex items-center gap-2">
-            <div className="hidden items-center gap-2.5 rounded-lg border border-line bg-surface-2 px-3 py-1.5 sm:flex">
-              <span className="grid h-7 w-7 place-items-center rounded-md bg-signal font-display text-[11px] font-bold text-white">
-                {initials(user?.name)}
-              </span>
-              <span className="leading-tight">
+            <Link
+              aria-label="Your profile"
+              className="tap-target flex items-center gap-2.5 rounded-lg border border-line bg-surface-2 px-2 py-1.5 transition hover:border-ink-3 sm:px-3"
+              href="/profile"
+              title="Your profile"
+            >
+              <Avatar name={user?.name} src={user?.avatarUrl} />
+              {/* The name and address are noise on a phone; the avatar is the link. */}
+              <span className="hidden leading-tight sm:block">
                 <span className="block text-xs font-semibold">{user?.name}</span>
                 <span className="block font-mono text-[10px] text-ink-3">
                   {user?.email}
                 </span>
               </span>
-            </div>
-            <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-signal px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-signal-ink">
+            </Link>
+            <label className="tap-target inline-flex cursor-pointer items-center gap-2 rounded-lg bg-signal px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-signal-ink">
               <UploadIcon className="h-4 w-4" />
               {isUploading ? "Uploading…" : "Upload"}
               <input
@@ -224,7 +319,7 @@ export function Dashboard() {
               />
             </label>
             <button
-              className="rounded-lg border border-line px-3 py-2 text-sm font-semibold text-ink-2 transition hover:border-ink-3 hover:text-ink"
+              className="tap-target hidden rounded-lg border border-line px-3 py-2 text-sm font-semibold text-ink-2 transition hover:border-ink-3 hover:text-ink sm:block"
               onClick={logout}
               type="button"
             >
@@ -265,7 +360,7 @@ export function Dashboard() {
         </section>
 
         <section className="mt-5 grid gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">
-          <aside className="h-max rounded-xl border border-line bg-surface p-4 shadow-sm">
+          <aside className="h-max min-w-0 rounded-xl border border-line bg-surface p-4 shadow-sm">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold">Documents</h2>
               <span className="font-mono text-[10px] text-ink-3">
@@ -310,7 +405,7 @@ export function Dashboard() {
             </div>
           </aside>
 
-          <div className="flex flex-col gap-5">
+          <div className="flex min-w-0 flex-col gap-5">
             <div className="rounded-xl border border-line bg-surface p-5 shadow-sm">
               {selectedFile ? (
                 <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -324,14 +419,24 @@ export function Dashboard() {
                       {selectedFile.pageCount === 1 ? "page" : "pages"}
                     </p>
                   </div>
-                  <button
-                    className="inline-flex flex-none items-center gap-2 rounded-lg bg-signal px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-signal-ink"
-                    onClick={() => void createShareLink(selectedFile.id)}
-                    type="button"
-                  >
-                    <LinkIcon className="h-4 w-4" />
-                    Create share link
-                  </button>
+                  <div className="flex flex-none flex-wrap gap-2">
+                    <Link
+                      className="tap-target inline-flex items-center gap-2 rounded-lg border border-line px-4 py-2 text-sm font-semibold text-ink-2 transition hover:border-ink-3 hover:text-ink"
+                      href={`/preview/${encodeURIComponent(selectedFile.id)}`}
+                    >
+                      <EyeIcon className="h-4 w-4" />
+                      Preview
+                    </Link>
+                    <button
+                      className="tap-target inline-flex items-center gap-2 rounded-lg bg-signal px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-signal-ink disabled:opacity-60"
+                      disabled={isCreatingLink}
+                      onClick={() => void createShareLink(selectedFile.id)}
+                      type="button"
+                    >
+                      <LinkIcon className="h-4 w-4" />
+                      {isCreatingLink ? "Creating…" : "Create share link"}
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <EmptyState text="Select a document to manage its share links." />
@@ -355,6 +460,7 @@ export function Dashboard() {
                       key={link.id}
                       link={link}
                       onCopy={() => void copyShareLink(link)}
+                      onDelete={() => void deleteLink(link.id)}
                       onUpdate={(patch) => void updateLink(link.id, patch)}
                       summary={summarizeLink(link, state)}
                     />
@@ -367,7 +473,7 @@ export function Dashboard() {
               <div className="border-b border-line p-5">
                 <h2 className="text-sm font-semibold">Recent activity</h2>
               </div>
-              <div className="max-h-[380px] overflow-auto p-2">
+              <div className="scroll-panel max-h-[380px] overflow-auto p-2">
                 {state.events.length === 0 ? (
                   <div className="p-3">
                     <EmptyState text="Open a share link to start collecting events." />
@@ -426,7 +532,7 @@ export function Dashboard() {
 
         <div className="mt-8 flex justify-end">
           <button
-            className="rounded-lg border border-line px-3 py-1.5 font-mono text-[11px] text-ink-3 transition hover:border-ink-3 hover:text-ink-2"
+            className="tap-target rounded-lg border border-line px-3 py-1.5 font-mono text-[11px] text-ink-3 transition hover:border-ink-3 hover:text-ink-2"
             onClick={() => void resetDemoData()}
             type="button"
           >
@@ -441,16 +547,6 @@ export function Dashboard() {
 function shareUrl(token: string) {
   if (typeof window === "undefined") return "";
   return `${window.location.origin}/view/${token}`;
-}
-
-function initials(name?: string) {
-  if (!name) return "··";
-  return name
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "")
-    .join("");
 }
 
 function relativeTime(iso: string, now: number) {
@@ -489,15 +585,18 @@ function LinkRow({
   copied,
   link,
   onCopy,
+  onDelete,
   onUpdate,
   summary,
 }: {
   copied: boolean;
   link: ShareLink;
   onCopy: () => void;
+  onDelete: () => void;
   onUpdate: (patch: LinkPatch) => void;
   summary: ReturnType<typeof summarizeLink>;
 }) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [title, setTitle] = useState(link.title);
   const [password, setPassword] = useState(link.password ?? "");
   const [expiresAt, setExpiresAt] = useState(() =>
@@ -524,7 +623,7 @@ function LinkRow({
           <div className="flex items-center gap-2">
             <input
               aria-label="Link title"
-              className="w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm font-semibold text-ink outline-none transition focus:border-signal"
+              className="tap-target w-full rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm font-semibold text-ink outline-none transition focus:border-signal"
               onChange={(event) => {
                 setTitle(event.target.value);
                 flushTitle(event.target.value.trim());
@@ -539,27 +638,53 @@ function LinkRow({
         </div>
         <div className="flex flex-none flex-wrap gap-2">
           <button
-            className="rounded-lg bg-signal px-3 py-2 text-sm font-semibold text-white transition hover:bg-signal-ink"
+            className="tap-target rounded-lg bg-signal px-3 py-2 text-sm font-semibold text-white transition hover:bg-signal-ink"
             onClick={onCopy}
             type="button"
           >
             {copied ? "Copied" : "Copy link"}
           </button>
           <button
-            className="rounded-lg border border-line px-3 py-2 text-sm font-semibold text-ink-2 transition hover:border-ink-3 hover:text-ink"
+            className="tap-target rounded-lg border border-line px-3 py-2 text-sm font-semibold text-ink-2 transition hover:border-ink-3 hover:text-ink"
             onClick={() => onUpdate({ enabled: !link.enabled })}
             type="button"
           >
             {link.enabled ? "Disable" : "Enable"}
           </button>
+          {confirmingDelete ? (
+            <>
+              <button
+                className="tap-target rounded-lg border border-crit/40 px-3 py-2 text-sm font-semibold text-crit transition hover:bg-crit/5"
+                onClick={onDelete}
+                type="button"
+              >
+                Confirm delete
+              </button>
+              <button
+                className="tap-target rounded-lg border border-line px-3 py-2 text-sm font-semibold text-ink-2 transition hover:border-ink-3 hover:text-ink"
+                onClick={() => setConfirmingDelete(false)}
+                type="button"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              className="tap-target rounded-lg border border-line px-3 py-2 text-sm font-semibold text-ink-3 transition hover:border-crit/40 hover:text-crit"
+              onClick={() => setConfirmingDelete(true)}
+              type="button"
+            >
+              Delete
+            </button>
+          )}
         </div>
       </div>
 
       <div className="mt-4 grid gap-2.5 md:grid-cols-3">
-        <label className="flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-sm text-ink-2">
+        <label className="tap-target flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-sm text-ink-2">
           <input
             checked={link.allowDownload}
-            className="accent-signal"
+            className="h-4 w-4 flex-none accent-signal"
             onChange={(event) => onUpdate({ allowDownload: event.target.checked })}
             type="checkbox"
           />
@@ -567,7 +692,7 @@ function LinkRow({
         </label>
         <input
           aria-label="Optional password"
-          className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink outline-none transition focus:border-signal"
+          className="tap-target rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink outline-none transition focus:border-signal"
           onChange={(event) => {
             setPassword(event.target.value);
             flushPassword(event.target.value);
@@ -577,7 +702,7 @@ function LinkRow({
         />
         <input
           aria-label="Link expiry"
-          className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink outline-none transition focus:border-signal"
+          className="tap-target rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink outline-none transition focus:border-signal"
           onChange={(event) => {
             setExpiresAt(event.target.value);
             // datetime-local is wall time; the server stores the UTC instant.

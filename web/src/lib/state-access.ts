@@ -22,7 +22,22 @@ export type PublicUser = {
   email: string;
   emailVerified: boolean;
   avatarUrl?: string;
+  /** True when the picture was uploaded here rather than by the provider. */
+  hasCustomAvatar: boolean;
 };
+
+/**
+ * An uploaded picture wins over the provider's. The version query makes the
+ * browser refetch as soon as a new one is saved, since the path never changes.
+ */
+export function avatarUrlFor(user: AppUser): string | undefined {
+  if (user.avatarStoragePath) {
+    const version = Date.parse(user.updatedAt ?? user.createdAt) || 0;
+    return `/api/profile/avatar?v=${version}`;
+  }
+
+  return user.avatarUrl;
+}
 
 export function publicUser(user: AppUser): PublicUser {
   return {
@@ -30,7 +45,8 @@ export function publicUser(user: AppUser): PublicUser {
     name: user.name,
     email: user.email,
     emailVerified: user.emailVerified,
-    avatarUrl: user.avatarUrl,
+    avatarUrl: avatarUrlFor(user),
+    hasCustomAvatar: Boolean(user.avatarStoragePath),
   };
 }
 
@@ -153,6 +169,19 @@ export function trimEventsForLink(
     kept += 1;
     return kept <= limit;
   });
+}
+
+/**
+ * Drops a link and everything that hangs off it. Sessions and events are keyed
+ * by link, so leaving them behind would orphan rows that nothing can reach.
+ */
+export function removeLinkCascade(state: LocalState, linkId: string): LocalState {
+  return {
+    ...state,
+    links: state.links.filter((link) => link.id !== linkId),
+    sessions: state.sessions.filter((session) => session.linkId !== linkId),
+    events: state.events.filter((event) => event.linkId !== linkId),
+  };
 }
 
 export function publicLinkFor(link: ShareLink): PublicShareLink {

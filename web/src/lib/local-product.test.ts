@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
+  MAX_NAME_LENGTH,
   applyLinkPatch,
   fromDateTimeLocalValue,
   getFileKind,
   isExpired,
+  normalizeDisplayName,
   publicLink,
   toDateTimeLocalValue,
 } from "./local-product";
@@ -136,5 +138,22 @@ describe("getFileKind", () => {
   test("rejects everything else", () => {
     assert.equal(getFileKind("text/html"), null);
     assert.equal(getFileKind("application/octet-stream"), null);
+  });
+});
+
+describe("normalizeDisplayName", () => {
+  test("trims and collapses whitespace", () => {
+    assert.equal(normalizeDisplayName("  Ada   Lovelace  "), "Ada Lovelace");
+  });
+
+  test("caps the length", () => {
+    assert.equal(normalizeDisplayName("x".repeat(500)).length, MAX_NAME_LENGTH);
+  });
+
+  test("rejects empty and non-text names", () => {
+    assert.throws(() => normalizeDisplayName("   "));
+    assert.throws(() => normalizeDisplayName(""));
+    assert.throws(() => normalizeDisplayName(42));
+    assert.throws(() => normalizeDisplayName(null));
   });
 });
