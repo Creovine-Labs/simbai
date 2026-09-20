@@ -14,7 +14,7 @@ export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const hasSessionCookie = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
 
-  if (pathname === "/" && !hasSessionCookie) {
+  if (isOwnerPath(pathname) && !hasSessionCookie) {
     const loginUrl = new URL("/login", request.url);
     return NextResponse.redirect(loginUrl);
   }
@@ -49,6 +49,15 @@ export function proxy(request: NextRequest) {
   const response = NextResponse.next({ request: { headers: requestHeaders } });
   response.headers.set("Content-Security-Policy", csp);
   return response;
+}
+
+/** Pages that only make sense for a signed-in owner. */
+function isOwnerPath(pathname: string) {
+  return (
+    pathname === "/" ||
+    pathname === "/profile" ||
+    pathname.startsWith("/preview/")
+  );
 }
 
 export const config = {

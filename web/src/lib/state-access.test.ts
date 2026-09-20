@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
+  avatarUrlFor,
   filterStateForUser,
   isClientEventType,
   normalizePageNumber,
   passwordFingerprint,
   publicUser,
+  removeLinkCascade,
   sanitizeEventMetadata,
   trimEventsForLink,
   validateShareLink,
@@ -272,6 +274,80 @@ describe("publicUser", () => {
       email: "alice@example.com",
       emailVerified: true,
       avatarUrl: undefined,
+      hasCustomAvatar: false,
     });
+  });
+
+  test("never leaks the storage path of an uploaded picture", () => {
+    const shaped = publicUser({
+      ...user("alice", "alice@example.com"),
+      avatarStoragePath: "avatars/alice-img_secret",
+      avatarContentType: "image/png",
+    });
+
+    assert.equal(JSON.stringify(shaped).includes("img_secret"), false);
+    assert.equal(shaped.hasCustomAvatar, true);
+  });
+});
+
+describe("avatarUrlFor", () => {
+  test("falls back to the provider picture when nothing was uploaded", () => {
+    assert.equal(
+      avatarUrlFor({
+        ...user("alice", "alice@example.com"),
+        avatarUrl: "https://lh3.googleusercontent.com/a/abc",
+      }),
+      "https://lh3.googleusercontent.com/a/abc",
+    );
+  });
+
+  test("an uploaded picture wins and carries a cache-busting version", () => {
+    const url = avatarUrlFor({
+      ...user("alice", "alice@example.com"),
+      avatarUrl: "https://lh3.googleusercontent.com/a/abc",
+      avatarStoragePath: "avatars/alice-img_1",
+      updatedAt: "2026-09-20T12:00:00.000Z",
+    });
+
+    assert.equal(url, `/api/profile/avatar?v=${Date.parse("2026-09-20T12:00:00.000Z")}`);
+  });
+
+  test("the version changes when the picture is replaced", () => {
+    const base = {
+      ...user("alice", "alice@example.com"),
+      avatarStoragePath: "avatars/alice-img_1",
+    };
+
+    assert.notEqual(
+      avatarUrlFor({ ...base, updatedAt: "2026-09-20T12:00:00.000Z" }),
+      avatarUrlFor({ ...base, updatedAt: "2026-09-20T12:05:00.000Z" }),
+    );
+  });
+
+  test("no picture at all yields nothing", () => {
+    assert.equal(avatarUrlFor(user("alice", "alice@example.com")), undefined);
+  });
+});
+
+describe("removeLinkCascade", () => {
+  test("removes the link with its sessions and events", () => {
+    const next = removeLinkCascade(fixture(), "link_a");
+
+    assert.deepEqual(next.links.map((l) => l.id), ["link_b"]);
+    assert.deepEqual(next.sessions.map((s) => s.id), ["ses_b"]);
+    assert.deepEqual(next.events.map((e) => e.id), ["evt_b"]);
+  });
+
+  test("leaves another owner's rows alone", () => {
+    const next = removeLinkCascade(fixture(), "link_a");
+    assert.equal(next.files.length, 2);
+    assert.equal(next.users.length, 2);
+  });
+
+  test("an unknown link id changes nothing", () => {
+    const before = fixture();
+    const next = removeLinkCascade(before, "link_missing");
+    assert.deepEqual(next.links.length, before.links.length);
+    assert.deepEqual(next.events.length, before.events.length);
   });
 });

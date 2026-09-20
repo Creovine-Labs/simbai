@@ -95,3 +95,44 @@ h4 {
     transition-duration: 0.001ms !important;
   }
 }
+
+/*
+ * Scroll containers. `overscroll-behavior` stops a nested list from handing its
+ * momentum to the page once it bottoms out, which is what makes an inner feed
+ * feel like it "sticks" mid-scroll.
+ */
+.scroll-panel {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+/* SMIL animations ignore the reduced-motion rule above, so stop them here. */
+@media (prefers-reduced-motion: reduce) {
+  animate,
+  animateTransform {
+    display: none;
+  }
+}
+
+/*
+ * Comfortable hit areas on phones without inflating desktop chrome. Scoped to
+ * small screens and coarse pointers so a mouse-driven layout is unchanged.
+ */
+@media (max-width: 640px), (pointer: coarse) {
+  .tap-target {
+    min-height: 44px;
+  }
+}
+
+/*
+ * iOS Safari zooms the whole page when a focused field is smaller than 16px,
+ * which throws the layout around mid-typing. Only the form controls are bumped,
+ * and only on small screens, so desktop typography is untouched.
+ */
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}

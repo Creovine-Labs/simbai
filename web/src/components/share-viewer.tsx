@@ -2,20 +2,15 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Brand } from "@/components/brand";
+import { DocumentViewer } from "@/components/document-viewer";
+import type { ViewerDocument } from "@/components/document-viewer";
 import { useVisiblePolling } from "@/components/use-poll";
 import type { ClientEventType } from "@/lib/local-product";
 
 const PRESENCE_INTERVAL_MS = 30_000;
 const REVALIDATE_INTERVAL_MS = 15_000;
-
-type ViewerFile = {
-  id: string;
-  name: string;
-  kind: "pdf" | "image";
-  pageCount: number;
-};
 
 type ViewerLink = {
   id: string;
@@ -28,7 +23,7 @@ type ViewerState =
   | { status: "loading" }
   | { status: "password"; message: string }
   | { status: "blocked"; reason: string }
-  | { status: "ready"; link: ViewerLink; file: ViewerFile };
+  | { status: "ready"; link: ViewerLink; file: ViewerDocument };
 
 export function ShareViewer() {
   const params = useParams<{ token: string }>();
@@ -36,7 +31,6 @@ export function ShareViewer() {
   const [viewer, setViewer] = useState<ViewerState>({ status: "loading" });
   const [passwordInput, setPasswordInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [activePage, setActivePage] = useState(1);
 
   const recordEvent = useCallback(
     (eventType: ClientEventType, pageNumber?: number) => {
@@ -162,22 +156,9 @@ export function ShareViewer() {
     event.preventDefault();
     setSubmitting(true);
     void requestSession(passwordInput)
-      .then((next) => {
-        setActivePage(1);
-        setViewer(next);
-      })
+      .then(setViewer)
       .finally(() => setSubmitting(false));
   }
-
-  function setPage(page: number) {
-    setActivePage(page);
-    recordEvent("page_viewed", page);
-  }
-
-  const pdfSrc = useMemo(() => {
-    if (viewer.status !== "ready" || viewer.file.kind !== "pdf") return "";
-    return `${contentUrl(viewer.file.id, token)}#page=${activePage}&toolbar=0`;
-  }, [activePage, token, viewer]);
 
   if (viewer.status === "loading") {
     return <Shell title="Opening secure link">Loading viewer…</Shell>;
@@ -229,87 +210,17 @@ export function ShareViewer() {
     );
   }
 
-  const { file, link } = viewer;
+  const contentUrl = `/api/files/${encodeURIComponent(viewer.file.id)}/content?token=${encodeURIComponent(token)}`;
 
   return (
-    <main className="min-h-screen bg-paper text-ink">
-      <header className="border-b border-line bg-surface">
-        <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-8">
-          <div className="min-w-0">
-            <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-3">
-              Secure viewer
-            </p>
-            <h1 className="mt-1 truncate text-xl font-semibold">{file.name}</h1>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {link.allowDownload ? (
-              <a
-                className="rounded-lg bg-signal px-4 py-2 text-sm font-semibold text-white transition hover:bg-signal-ink"
-                download={file.name}
-                href={`${contentUrl(file.id, token)}&download=1`}
-                onClick={() => recordEvent("download_clicked", activePage)}
-              >
-                Download
-              </a>
-            ) : (
-              <span className="rounded-lg border border-line px-4 py-2 text-sm font-semibold text-ink-3">
-                Download disabled
-              </span>
-            )}
-            <Link
-              className="rounded-lg border border-line px-4 py-2 text-sm font-semibold text-ink-2 transition hover:border-ink-3 hover:text-ink"
-              href="/"
-            >
-              Dashboard
-            </Link>
-          </div>
-        </div>
-      </header>
-
-      <section className="mx-auto grid max-w-7xl gap-4 px-4 py-4 sm:px-6 lg:grid-cols-[220px_minmax(0,1fr)] lg:px-8">
-        <aside className="h-max rounded-xl border border-line bg-surface p-3">
-          <p className="px-2 py-1 text-sm font-semibold">Pages</p>
-          <div className="mt-2 grid grid-cols-4 gap-2 lg:grid-cols-1">
-            {Array.from({ length: file.pageCount }).map((_, index) => {
-              const page = index + 1;
-              const active = activePage === page;
-              return (
-                <button
-                  className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${
-                    active
-                      ? "border-signal bg-signal-wash text-signal-ink"
-                      : "border-line bg-surface hover:bg-surface-2"
-                  }`}
-                  key={page}
-                  onClick={() => setPage(page)}
-                  type="button"
-                >
-                  Page {page}
-                </button>
-              );
-            })}
-          </div>
-        </aside>
-
-        <div className="min-h-[72vh] overflow-hidden rounded-xl border border-line bg-surface">
-          {file.kind === "image" ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              alt={file.name}
-              className="mx-auto max-h-[78vh] w-auto max-w-full object-contain"
-              src={contentUrl(file.id, token)}
-            />
-          ) : (
-            <iframe className="h-[78vh] w-full" src={pdfSrc} title={file.name} />
-          )}
-        </div>
-      </section>
-    </main>
+    <DocumentViewer
+      contentUrl={contentUrl}
+      downloadUrl={viewer.link.allowDownload ? `${contentUrl}&download=1` : undefined}
+      file={viewer.file}
+      onDownload={() => recordEvent("download_clicked")}
+      onPageChange={(page) => recordEvent("page_viewed", page)}
+    />
   );
-}
-
-function contentUrl(fileId: string, token: string) {
-  return `/api/files/${encodeURIComponent(fileId)}/content?token=${encodeURIComponent(token)}`;
 }
 
 function Shell({

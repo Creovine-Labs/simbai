@@ -140,7 +140,8 @@ async function upsertFirebaseUser(
     if (existing) {
       const updated: AppUser = {
         ...existing,
-        name: firebaseUser.name,
+        // A name the user set in their profile survives later sign-ins.
+        name: existing.nameIsCustom ? existing.name : firebaseUser.name,
         email: firebaseUser.email,
         emailVerified: firebaseUser.emailVerified,
         avatarUrl: firebaseUser.picture,
