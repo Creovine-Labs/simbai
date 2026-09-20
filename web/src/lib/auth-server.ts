@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { createHash, randomBytes } from "node:crypto";
 import { makeId } from "@/lib/local-product";
-import type { AppUser } from "@/lib/local-product";
+import type { AppUser, LocalState } from "@/lib/local-product";
 import { publicUser } from "@/lib/state-access";
 import { verifyFirebaseIdToken } from "@/lib/firebase-admin";
 import type { VerifiedFirebaseUser } from "@/lib/firebase-admin";
@@ -22,26 +22,37 @@ function hashSessionToken(token: string) {
     .digest("hex");
 }
 
-export async function getCurrentUser(): Promise<AppUser | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get(SESSION_COOKIE)?.value;
+/** Resolves a session cookie against an already-loaded state. No store read. */
+export function userFromState(state: LocalState, token: string | undefined) {
+  if (!token) return null;
 
-  if (!token) {
-    return null;
-  }
-
-  const state = await readServerState();
   const tokenHash = hashSessionToken(token);
   const now = new Date();
   const session = state.authSessions.find(
     (item) => item.tokenHash === tokenHash && new Date(item.expiresAt) > now,
   );
 
-  if (!session) {
-    return null;
-  }
-
+  if (!session) return null;
   return state.users.find((user) => user.id === session.userId) ?? null;
+}
+
+/**
+ * One store read for both the session and the workspace. The dashboard polls
+ * this constantly, and the store bills per read, so loading it twice per
+ * request was the single largest source of traffic.
+ */
+export async function readSession(): Promise<{
+  state: LocalState;
+  user: AppUser | null;
+}> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(SESSION_COOKIE)?.value;
+  const state = await readServerState();
+  return { state, user: userFromState(state, token) };
+}
+
+export async function getCurrentUser(): Promise<AppUser | null> {
+  return (await readSession()).user;
 }
 
 export async function requireCurrentUser(): Promise<AppUser> {

@@ -1,13 +1,15 @@
 import { NextResponse } from "next/server";
-import { requireCurrentUser } from "@/lib/auth-server";
+import { AuthenticationError, readSession, requireCurrentUser } from "@/lib/auth-server";
 import { filterStateForUser } from "@/lib/state-access";
-import { readServerState, resetServerState } from "@/lib/server-store";
+import { resetServerState } from "@/lib/server-store";
 import { NO_STORE, errorResponse } from "@/lib/api";
 
 export async function GET() {
   try {
-    const user = await requireCurrentUser();
-    const state = await readServerState();
+    // Single read, same as /api/auth/me.
+    const { state, user } = await readSession();
+    if (!user) throw new AuthenticationError();
+
     return NextResponse.json(filterStateForUser(state, user.id), {
       headers: NO_STORE,
     });

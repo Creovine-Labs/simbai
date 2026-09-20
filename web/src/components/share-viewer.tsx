@@ -9,8 +9,9 @@ import type { ViewerDocument } from "@/components/document-viewer";
 import { useVisiblePolling } from "@/components/use-poll";
 import type { ClientEventType } from "@/lib/local-product";
 
-const PRESENCE_INTERVAL_MS = 30_000;
-const REVALIDATE_INTERVAL_MS = 15_000;
+// Both of these cost a store read on every tick, so they run sparingly.
+const PRESENCE_INTERVAL_MS = 60_000;
+const REVALIDATE_INTERVAL_MS = 60_000;
 
 type ViewerLink = {
   id: string;
@@ -116,6 +117,10 @@ export function ShareViewer() {
   useVisiblePolling(
     async () => {
       const response = await fetch(`/api/share/${encodeURIComponent(token)}`);
+
+      // 5xx means our server is struggling, not that the link was revoked.
+      if (response.status >= 500) return;
+
       const payload = await response.json().catch(() => ({}));
 
       if (!response.ok || !payload.ok) {

@@ -61,31 +61,56 @@ function freshest(fromStore: LocalState): LocalState {
   return fromStore;
 }
 
-export async function readServerState(): Promise<LocalState> {
+/**
+ * Raised when the store could not be read. Deliberately distinct from "the
+ * store is empty": treating a failed read as empty state is how a transient
+ * outage turns into a write that erases every file and link.
+ */
+export class StoreUnavailableError extends Error {
+  constructor(cause?: unknown) {
+    super("The data store is temporarily unavailable.");
+    this.name = "StoreUnavailableError";
+    this.cause = cause;
+  }
+}
+
+async function loadStateFromStore(): Promise<LocalState> {
   if (shouldUseVercelBlob()) {
+    let result;
     try {
-      const result = await get(STATE_BLOB_PATH, {
-        access: "private",
-        useCache: false,
-      });
+      result = await get(STATE_BLOB_PATH, { access: "private", useCache: false });
+    } catch (cause) {
+      // Network error, revoked token, exhausted quota: unknown, not empty.
+      throw new StoreUnavailableError(cause);
+    }
 
-      if (!result || result.statusCode === 304 || !result.stream) {
-        return emptyState();
-      }
+    // A genuinely absent object is an empty workspace, which is fine.
+    if (!result || result.statusCode === 304 || !result.stream) {
+      return emptyState();
+    }
 
+    try {
       const raw = await new Response(result.stream).text();
-      return freshest({ ...emptyState(), ...JSON.parse(raw) } as LocalState);
-    } catch {
-      return freshest(emptyState());
+      return { ...emptyState(), ...JSON.parse(raw) } as LocalState;
+    } catch (cause) {
+      // A truncated or malformed body must not read as "no data".
+      throw new StoreUnavailableError(cause);
     }
   }
 
   try {
     const raw = await readFile(STATE_FILE, "utf8");
-    return freshest({ ...emptyState(), ...JSON.parse(raw) } as LocalState);
-  } catch {
-    return freshest(emptyState());
+    return { ...emptyState(), ...JSON.parse(raw) } as LocalState;
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return emptyState();
+    }
+    throw new StoreUnavailableError(cause);
   }
+}
+
+export async function readServerState(): Promise<LocalState> {
+  return freshest(await loadStateFromStore());
 }
 
 async function writeServerState(state: LocalState) {

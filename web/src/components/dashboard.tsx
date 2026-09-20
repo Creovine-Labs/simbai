@@ -21,8 +21,15 @@ import {
 } from "@/lib/local-product";
 import type { LinkPatch, LocalState, ShareLink } from "@/lib/local-product";
 
-const POLL_INTERVAL_MS = 5000;
-const CLOCK_INTERVAL_MS = 15000;
+/**
+ * Each refresh is a billed read against the store, so this is deliberately
+ * unhurried. Anything the user does themselves updates the page immediately
+ * from the write's own response; this only catches changes made elsewhere.
+ */
+const POLL_INTERVAL_MS = 30_000;
+const CLOCK_INTERVAL_MS = 15_000;
+/** A viewer pings once a minute, so allow a couple of misses before dropping. */
+const ACTIVE_VIEWER_WINDOW_MS = 150_000;
 const EDIT_DEBOUNCE_MS = 600;
 
 type PublicUser = {
@@ -112,7 +119,7 @@ export function Dashboard() {
   }, [state]);
 
   const activeViewers = useMemo(() => {
-    const cutoff = now - 60_000;
+    const cutoff = now - ACTIVE_VIEWER_WINDOW_MS;
     return state.sessions.filter(
       (session) => new Date(session.lastSeenAt).getTime() > cutoff,
     ).length;
@@ -133,8 +140,15 @@ export function Dashboard() {
       return;
     }
 
+    // A store outage or any other server error is transient. Keep showing what
+    // we already have rather than throwing the user back to the login page.
+    if (!response.ok) {
+      setAuthChecked(true);
+      return;
+    }
+
     const payload = await response.json();
-    if (!response.ok || !payload.user) {
+    if (!payload.user) {
       await goToLogin();
       return;
     }
