@@ -1,13 +1,8 @@
 import { NextResponse } from "next/server";
-import { loginUser } from "@/lib/auth-server";
 
-export async function POST(request: Request) {
-  try {
-    return NextResponse.json({ user: await loginUser(await request.json()) });
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Login failed." },
-      { status: 401 },
-    );
-  }
+export async function POST() {
+  return NextResponse.json(
+    { error: "Use Firebase Auth, then POST the Firebase ID token to /api/auth/session." },
+    { status: 410 },
+  );
 }

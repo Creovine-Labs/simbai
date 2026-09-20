@@ -3,6 +3,19 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
+import { AuthShell } from "@/components/auth-shell";
+import {
+  AuthDivider,
+  AuthError,
+  AuthField,
+  GoogleButton,
+  SubmitButton,
+} from "@/components/auth-form";
+import {
+  isFirebaseClientConfigured,
+  signInWithEmail,
+  signInWithGoogle,
+} from "@/lib/firebase-client";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -13,111 +26,89 @@ export default function LoginPage() {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    await finishFirebaseAuth(() => signInWithEmail(email, password));
+  }
+
+  async function continueWithGoogle() {
+    await finishFirebaseAuth(signInWithGoogle);
+  }
+
+  async function finishFirebaseAuth(
+    action: () => Promise<{ user: { getIdToken: () => Promise<string> } }>,
+  ) {
     setError("");
-    setLoading(true);
 
-    const response = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-
-    const payload = await response.json();
-    setLoading(false);
-
-    if (!response.ok) {
-      setError(payload.error ?? "Login failed.");
+    if (!isFirebaseClientConfigured()) {
+      setError("Firebase is not configured yet. Add the Firebase env variables first.");
       return;
     }
 
-    router.push("/");
+    try {
+      setLoading(true);
+      const credential = await action();
+      const idToken = await credential.user.getIdToken();
+      const response = await fetch("/api/auth/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idToken }),
+      });
+      const payload = await response.json();
+
+      if (!response.ok) {
+        setError(payload.error ?? "Could not create app session.");
+        return;
+      }
+
+      router.push("/");
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Login failed.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
     <AuthShell
+      eyebrow="Welcome back"
+      title="Log in to Simbai"
+      subtitle="Your library, share links and viewer analytics."
       footer={
         <>
           New to Simbai?{" "}
-          <Link className="font-semibold text-[#235a4f]" href="/signup">
+          <Link className="font-semibold text-signal-ink" href="/signup">
             Create an account
           </Link>
         </>
       }
-      title="Log in"
     >
-      <form className="mt-6 flex flex-col gap-4" onSubmit={submit}>
-        <Field
+      <GoogleButton
+        label="Continue with Google"
+        disabled={loading}
+        onClick={continueWithGoogle}
+      />
+
+      <AuthDivider />
+
+      <form className="flex flex-col gap-3.5" onSubmit={submit}>
+        <AuthField
           label="Email"
-          onChange={setEmail}
           type="email"
           value={email}
+          onChange={setEmail}
+          autoComplete="email"
         />
-        <Field
+        <AuthField
           label="Password"
-          onChange={setPassword}
           type="password"
           value={password}
+          onChange={setPassword}
+          autoComplete="current-password"
         />
-        {error ? <p className="text-sm text-[#9a441b]">{error}</p> : null}
-        <button
-          className="rounded-md bg-[#235a4f] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#1b463e]"
-          disabled={loading}
-          type="submit"
-        >
-          {loading ? "Logging in..." : "Log in"}
-        </button>
+        <AuthError message={error} />
+        <SubmitButton disabled={loading}>
+          {loading ? "Logging in…" : "Log in"}
+        </SubmitButton>
       </form>
     </AuthShell>
-  );
-}
-
-function AuthShell({
-  children,
-  footer,
-  title,
-}: {
-  children: React.ReactNode;
-  footer: React.ReactNode;
-  title: string;
-}) {
-  return (
-    <main className="flex min-h-screen items-center justify-center bg-[#f6f3ee] px-4 text-[#1d2527]">
-      <section className="w-full max-w-md rounded-lg border border-[#d8d1c7] bg-white p-6 shadow-sm">
-        <p className="text-sm font-semibold uppercase tracking-[0.18em] text-[#35635b]">
-          Simbai Share
-        </p>
-        <h1 className="mt-2 text-3xl font-semibold">{title}</h1>
-        <p className="mt-2 text-sm leading-6 text-[#68736f]">
-          Access your file library, share links, and viewer analytics.
-        </p>
-        {children}
-        <p className="mt-6 text-center text-sm text-[#68736f]">{footer}</p>
-      </section>
-    </main>
-  );
-}
-
-function Field({
-  label,
-  onChange,
-  type,
-  value,
-}: {
-  label: string;
-  onChange: (value: string) => void;
-  type: string;
-  value: string;
-}) {
-  return (
-    <label className="flex flex-col gap-2 text-sm font-semibold">
-      {label}
-      <input
-        className="rounded-md border border-[#d8d1c7] px-3 py-3 font-normal outline-none focus:border-[#235a4f]"
-        onChange={(event) => onChange(event.target.value)}
-        required
-        type={type}
-        value={value}
-      />
-    </label>
   );
 }

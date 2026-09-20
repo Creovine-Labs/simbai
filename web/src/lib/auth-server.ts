@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
-import { pbkdf2Sync, randomBytes, timingSafeEqual } from "node:crypto";
+import { pbkdf2Sync, randomBytes } from "node:crypto";
 import { AppUser, LocalState, makeId } from "@/lib/local-product";
+import { VerifiedFirebaseUser, verifyFirebaseIdToken } from "@/lib/firebase-admin";
 import { readServerState, writeServerState } from "@/lib/server-store";
 
 const SESSION_COOKIE = "simbai_session";
@@ -10,6 +11,7 @@ export type PublicUser = {
   id: string;
   name: string;
   email: string;
+  avatarUrl?: string;
 };
 
 export function publicUser(user: AppUser): PublicUser {
@@ -17,6 +19,7 @@ export function publicUser(user: AppUser): PublicUser {
     id: user.id,
     name: user.name,
     email: user.email,
+    avatarUrl: user.avatarUrl,
   };
 }
 
@@ -74,62 +77,9 @@ export async function getCurrentUser() {
   return state.users.find((user) => user.id === session.userId) ?? null;
 }
 
-export async function signUpUser({
-  email,
-  name,
-  password,
-}: {
-  email: string;
-  name: string;
-  password: string;
-}) {
-  const normalizedEmail = email.trim().toLowerCase();
-
-  if (!normalizedEmail || !name.trim() || password.length < 8) {
-    throw new Error("Use a name, valid email, and password of at least 8 characters.");
-  }
-
-  const state = await readServerState();
-  if (state.users.some((user) => user.email === normalizedEmail)) {
-    throw new Error("An account with this email already exists.");
-  }
-
-  const passwordSalt = randomBytes(16).toString("hex");
-  const user: AppUser = {
-    id: makeId("user"),
-    name: name.trim(),
-    email: normalizedEmail,
-    passwordSalt,
-    passwordHash: hashPassword(password, passwordSalt),
-    createdAt: new Date().toISOString(),
-  };
-
-  const nextState = {
-    ...state,
-    users: [user, ...state.users],
-  };
-
-  await writeServerState(nextState);
-  await createSessionCookie(user.id);
-  return publicUser(user);
-}
-
-export async function loginUser({
-  email,
-  password,
-}: {
-  email: string;
-  password: string;
-}) {
-  const state = await readServerState();
-  const user = state.users.find(
-    (item) => item.email === email.trim().toLowerCase(),
-  );
-
-  if (!user || !verifyPassword(password, user.passwordSalt, user.passwordHash)) {
-    throw new Error("Email or password is incorrect.");
-  }
-
+export async function createFirebaseSession(idToken: string) {
+  const firebaseUser = await verifyFirebaseIdToken(idToken);
+  const user = await upsertFirebaseUser(firebaseUser);
   await createSessionCookie(user.id);
   return publicUser(user);
 }
@@ -183,19 +133,56 @@ async function createSessionCookie(userId: string) {
   });
 }
 
-function hashPassword(password: string, salt: string) {
-  return pbkdf2Sync(password, salt, 120000, 64, "sha512").toString("hex");
-}
-
-function verifyPassword(password: string, salt: string, expectedHash: string) {
-  const actual = Buffer.from(hashPassword(password, salt), "hex");
-  const expected = Buffer.from(expectedHash, "hex");
-
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
-}
-
 function hashSessionToken(token: string) {
   return pbkdf2Sync(token, "simbai-session-v1", 80000, 32, "sha256").toString(
     "hex",
   );
+}
+
+async function upsertFirebaseUser(firebaseUser: VerifiedFirebaseUser) {
+  const state = await readServerState();
+  const now = new Date().toISOString();
+  const existingUser = state.users.find(
+    (user) => user.firebaseUid === firebaseUser.uid || user.email === firebaseUser.email,
+  );
+
+  if (existingUser) {
+    const updatedUser: AppUser = {
+      ...existingUser,
+      id: existingUser.id,
+      firebaseUid: firebaseUser.uid,
+      name: firebaseUser.name,
+      email: firebaseUser.email,
+      avatarUrl: firebaseUser.picture,
+      authProvider: "firebase",
+      updatedAt: now,
+    };
+
+    await writeServerState({
+      ...state,
+      users: state.users.map((user) =>
+        user.id === existingUser.id ? updatedUser : user,
+      ),
+    });
+
+    return updatedUser;
+  }
+
+  const user: AppUser = {
+    id: `firebase_${firebaseUser.uid}`,
+    firebaseUid: firebaseUser.uid,
+    name: firebaseUser.name,
+    email: firebaseUser.email,
+    avatarUrl: firebaseUser.picture,
+    authProvider: "firebase",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await writeServerState({
+    ...state,
+    users: [user, ...state.users],
+  });
+
+  return user;
 }

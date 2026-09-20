@@ -1,26 +1,97 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+  --paper: #f2f3f6;
+  --surface: #ffffff;
+  --surface-2: #f7f8fb;
+  --ink: #14161d;
+  --ink-2: #545a6b;
+  --ink-3: #878da0;
+  --line: #e4e6ee;
+  --line-2: #edeef3;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --signal: #242cc7;
+  --signal-ink: #1c23a8;
+  --signal-wash: #ebecfa;
+
+  --good: #1e9c5b;
+  --warn: #a9720e;
+  --crit: #cf3f3d;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --paper: #0b0c10;
+    --surface: #141520;
+    --surface-2: #1b1c29;
+    --ink: #ecedf3;
+    --ink-2: #9ba1b4;
+    --ink-3: #6b7083;
+    --line: #262838;
+    --line-2: #1e2030;
+
+    --signal: #7c84ff;
+    --signal-ink: #9aa0ff;
+    --signal-wash: #1b1d3c;
+
+    --good: #43c07e;
+    --warn: #d69a44;
+    --crit: #ea6462;
   }
 }
 
+@theme inline {
+  --font-sans: var(--font-hanken);
+  --font-display: var(--font-bricolage);
+  --font-mono: var(--font-jetbrains);
+
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-signal: var(--signal);
+  --color-signal-ink: var(--signal-ink);
+  --color-signal-wash: var(--signal-wash);
+  --color-good: var(--good);
+  --color-warn: var(--warn);
+  --color-crit: var(--crit);
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-display), var(--font-sans), system-ui, sans-serif;
+  letter-spacing: -0.02em;
+}
+
+::selection {
+  background: var(--signal);
+  color: #fff;
+}
+
+:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
 }

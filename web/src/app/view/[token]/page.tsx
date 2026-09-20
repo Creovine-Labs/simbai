@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Brand } from "@/components/brand";
 import { FileAsset, ShareLink, ViewerSession } from "@/lib/local-product";
 
 type ViewerState =
@@ -168,14 +169,17 @@ export default function ShareViewer() {
   }, [activePage, params.token, viewer]);
 
   if (viewer.status === "loading") {
-    return <Shell title="Opening secure link">Loading viewer...</Shell>;
+    return <Shell title="Opening secure link">Loading viewer…</Shell>;
   }
 
   if (viewer.status === "blocked") {
     return (
       <Shell title="Link unavailable">
-        <p className="text-[#69736f]">{viewer.reason}</p>
-        <Link className="mt-4 inline-flex text-sm font-semibold text-[#235a4f]" href="/">
+        <p className="text-ink-2">{viewer.reason}</p>
+        <Link
+          className="mt-4 inline-flex text-sm font-semibold text-signal-ink"
+          href="/"
+        >
           Back to dashboard
         </Link>
       </Shell>
@@ -186,12 +190,10 @@ export default function ShareViewer() {
     return (
       <Shell title={viewer.link.title}>
         <div className="max-w-md">
-          <p className="text-sm text-[#69736f]">
-            This share link is password protected.
-          </p>
+          <p className="text-sm text-ink-2">This share link is password protected.</p>
           <div className="mt-4 flex gap-2">
             <input
-              className="min-w-0 flex-1 rounded-md border border-[#d8d1c7] px-3 py-2 outline-none focus:border-[#235a4f]"
+              className="min-w-0 flex-1 rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink outline-none transition focus:border-signal"
               onChange={(event) => setPasswordInput(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter") submitPassword();
@@ -201,7 +203,7 @@ export default function ShareViewer() {
               value={passwordInput}
             />
             <button
-              className="rounded-md bg-[#235a4f] px-4 py-2 text-sm font-semibold text-white"
+              className="rounded-lg bg-signal px-4 py-2 text-sm font-semibold text-white transition hover:bg-signal-ink"
               onClick={submitPassword}
               type="button"
             >
@@ -209,7 +211,7 @@ export default function ShareViewer() {
             </button>
           </div>
           {passwordInput && passwordInput !== viewer.link.password ? (
-            <p className="mt-3 text-sm text-[#9a441b]">Password does not match.</p>
+            <p className="mt-3 text-sm text-crit">Password does not match.</p>
           ) : null}
         </div>
       </Shell>
@@ -217,21 +219,19 @@ export default function ShareViewer() {
   }
 
   return (
-    <main className="min-h-screen bg-[#ece8df] text-[#1d2527]">
-      <header className="border-b border-[#d8d1c7] bg-white">
+    <main className="min-h-screen bg-paper text-ink">
+      <header className="border-b border-line bg-surface">
         <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-8">
           <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#35635b]">
+            <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-3">
               Secure viewer
             </p>
-            <h1 className="mt-1 truncate text-xl font-semibold">
-              {viewer.file.name}
-            </h1>
+            <h1 className="mt-1 truncate text-xl font-semibold">{viewer.file.name}</h1>
           </div>
           <div className="flex flex-wrap gap-2">
             {viewer.link.allowDownload ? (
               <a
-                className="rounded-md bg-[#235a4f] px-4 py-2 text-sm font-semibold text-white"
+                className="rounded-lg bg-signal px-4 py-2 text-sm font-semibold text-white transition hover:bg-signal-ink"
                 download={viewer.file.name}
                 href={fileContentUrl(viewer.file.id, params.token)}
                 onClick={trackDownload}
@@ -239,12 +239,12 @@ export default function ShareViewer() {
                 Download
               </a>
             ) : (
-              <span className="rounded-md border border-[#c9c0b3] px-4 py-2 text-sm font-semibold text-[#69736f]">
+              <span className="rounded-lg border border-line px-4 py-2 text-sm font-semibold text-ink-3">
                 Download disabled
               </span>
             )}
             <Link
-              className="rounded-md border border-[#c9c0b3] px-4 py-2 text-sm font-semibold"
+              className="rounded-lg border border-line px-4 py-2 text-sm font-semibold text-ink-2 transition hover:border-ink-3 hover:text-ink"
               href="/"
             >
               Dashboard
@@ -254,17 +254,18 @@ export default function ShareViewer() {
       </header>
 
       <section className="mx-auto grid max-w-7xl gap-4 px-4 py-4 sm:px-6 lg:grid-cols-[220px_minmax(0,1fr)] lg:px-8">
-        <aside className="rounded-lg border border-[#d8d1c7] bg-white p-3">
+        <aside className="h-max rounded-xl border border-line bg-surface p-3">
           <p className="px-2 py-1 text-sm font-semibold">Pages</p>
           <div className="mt-2 grid grid-cols-4 gap-2 lg:grid-cols-1">
             {Array.from({ length: viewer.file.pageCount }).map((_, index) => {
               const page = index + 1;
+              const active = activePage === page;
               return (
                 <button
-                  className={`rounded-md border px-3 py-2 text-sm font-semibold ${
-                    activePage === page
-                      ? "border-[#235a4f] bg-[#edf7f3] text-[#1d4d43]"
-                      : "border-[#e4ded5] bg-white"
+                  className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${
+                    active
+                      ? "border-signal bg-signal-wash text-signal-ink"
+                      : "border-line bg-surface hover:bg-surface-2"
                   }`}
                   key={page}
                   onClick={() => setPage(page)}
@@ -277,7 +278,7 @@ export default function ShareViewer() {
           </div>
         </aside>
 
-        <div className="min-h-[72vh] overflow-hidden rounded-lg border border-[#d8d1c7] bg-white">
+        <div className="min-h-[72vh] overflow-hidden rounded-xl border border-line bg-surface">
           {viewer.file.kind === "image" ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -310,12 +311,10 @@ function Shell({
   title: string;
 }) {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#f6f3ee] px-4 text-[#1d2527]">
-      <section className="w-full max-w-xl rounded-lg border border-[#d8d1c7] bg-white p-6 shadow-sm">
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#35635b]">
-          Simbai Share
-        </p>
-        <h1 className="mt-2 text-2xl font-semibold">{title}</h1>
+    <main className="flex min-h-screen items-center justify-center bg-paper px-4 text-ink">
+      <section className="w-full max-w-xl rounded-xl border border-line bg-surface p-6 shadow-sm">
+        <Brand className="text-sm" />
+        <h1 className="mt-3 text-2xl font-semibold">{title}</h1>
         <div className="mt-4">{children}</div>
       </section>
     </main>

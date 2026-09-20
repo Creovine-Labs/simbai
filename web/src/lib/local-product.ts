@@ -54,11 +54,15 @@ export type ViewerSession = {
 
 export type AppUser = {
   id: string;
+  firebaseUid?: string;
   name: string;
   email: string;
-  passwordHash: string;
-  passwordSalt: string;
+  authProvider?: "firebase" | "password";
+  avatarUrl?: string;
+  passwordHash?: string;
+  passwordSalt?: string;
   createdAt: string;
+  updatedAt?: string;
 };
 
 export type AuthSession = {

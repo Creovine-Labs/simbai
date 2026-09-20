@@ -9,7 +9,9 @@ This repository currently contains a local V1 prototype. It is designed for prod
 Implemented in local V1:
 
 - Signup and login
-- Password hashing and secure session cookies
+- Firebase Authentication integration
+- Continue with Google
+- Firebase-verified users and secure session cookies
 - User-owned dashboard files, links, sessions, and analytics
 - PDF and image uploads
 - Share-link creation
@@ -84,7 +86,19 @@ The hosted Vercel demo stores uploaded file content and prototype state in a pri
 
 The current V1 includes self-contained prototype accounts. Users can sign up at `/signup`, log in at `/login`, and manage only their own uploaded files and share links.
 
-Passwords are hashed before storage and sessions are stored in HTTP-only cookies. This is suitable for testing the product flow, but the planned production auth layer is still Supabase Auth.
+Firebase Auth is now the authentication source. The app supports email/password auth and Google sign-in through Firebase, then creates a Simbai HTTP-only session cookie after the server verifies the Firebase ID token.
+
+Required Firebase setup:
+
+1. Create a Firebase project.
+2. Enable Authentication.
+3. Enable Email/Password provider.
+4. Enable Google provider.
+5. Add the deployed Vercel domain to Firebase Auth authorized domains.
+6. Create a Firebase web app and copy the client config values into `web/.env.local`.
+7. Add `FIREBASE_PROJECT_ID` to Vercel environment variables so the server can verify Firebase ID tokens.
+
+Use `web/.env.example` as the template.
 
 ## Roadmap
 

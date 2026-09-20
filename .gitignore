@@ -14,7 +14,9 @@ web/.data/
 
 # env and secrets
 .env*
+!.env.example
 web/.env*
+!web/.env.example
 gitignore-folder/
 
 # logs
