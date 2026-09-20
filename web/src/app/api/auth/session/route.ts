@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createFirebaseSession } from "@/lib/auth-server";
 import { clientKey, rateLimit } from "@/lib/rate-limit";
-import { NO_STORE } from "@/lib/api";
+import { NO_STORE, errorResponse } from "@/lib/api";
 
 // A Firebase ID token is a JWT; anything much larger is not worth verifying.
 const MAX_ID_TOKEN_LENGTH = 4096;
@@ -38,14 +38,7 @@ export async function POST(request: Request) {
       { headers: NO_STORE },
     );
   } catch (error) {
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Could not create Firebase session.",
-      },
-      { status: 401 },
-    );
+    // A store outage is a 503; only a genuinely bad token is a 401.
+    return errorResponse(error, "Could not create Firebase session.", 401);
   }
 }

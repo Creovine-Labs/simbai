@@ -3,7 +3,7 @@ import { readViewerGrant } from "@/lib/auth-server";
 import { recordViewerEvent } from "@/lib/server-store";
 import { isClientEventType, sanitizeEventMetadata } from "@/lib/state-access";
 import { clientKey, rateLimit } from "@/lib/rate-limit";
-import { NO_STORE } from "@/lib/api";
+import { NO_STORE, errorResponse } from "@/lib/api";
 
 export async function POST(request: Request) {
   const limit = rateLimit(clientKey(request, "events"), 120, 60_000);
@@ -38,13 +38,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false }, { status: 403, headers: NO_STORE });
   }
 
-  const ok = await recordViewerEvent({
-    token: body.token,
-    sessionId,
-    eventType: body.eventType,
-    pageNumber: body.pageNumber,
-    metadata: sanitizeEventMetadata(body.metadata),
-  });
+  try {
+    const ok = await recordViewerEvent({
+      token: body.token,
+      sessionId,
+      eventType: body.eventType,
+      pageNumber: body.pageNumber,
+      metadata: sanitizeEventMetadata(body.metadata),
+    });
 
-  return NextResponse.json({ ok }, { status: ok ? 200 : 403, headers: NO_STORE });
+    return NextResponse.json({ ok }, { status: ok ? 200 : 403, headers: NO_STORE });
+  } catch (error) {
+    return errorResponse(error, "Could not record that event.");
+  }
 }
