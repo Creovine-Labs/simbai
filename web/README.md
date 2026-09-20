@@ -42,6 +42,15 @@ Local development keeps state in `.data/state.json` and uploaded bytes in
 When `VERCEL=1`, both move to a private Vercel Blob store. The production
 direction is still Supabase Auth, PostgreSQL, Supabase Storage, and Vercel.
 
+Vercel Blob bills per operation, and this design reads the whole store on
+every request, so request volume is a real cost. Keep it in mind before adding
+any polling: the dashboard refreshes every 30s and the viewer every 60s, each
+costing one read, and anything the user does themselves updates the page from
+that write's own response rather than waiting for a poll. A read failure is
+never treated as an empty store — `readServerState` throws
+`StoreUnavailableError` so an outage can't lead to a write that erases
+everything. This is the main reason to finish the move to Postgres.
+
 Every read-modify-write of the state file is serialized through an in-process
 lock, so concurrent requests on one instance cannot clobber each other. The JSON
 store has no compare-and-set, so two Vercel instances writing at the same
