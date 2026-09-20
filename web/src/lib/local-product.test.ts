@@ -5,8 +5,10 @@ import {
   applyLinkPatch,
   fromDateTimeLocalValue,
   getFileKind,
+  isAcceptableRevision,
   isExpired,
   normalizeDisplayName,
+  revisionOf,
   publicLink,
   toDateTimeLocalValue,
 } from "./local-product";
@@ -155,5 +157,28 @@ describe("normalizeDisplayName", () => {
     assert.throws(() => normalizeDisplayName(""));
     assert.throws(() => normalizeDisplayName(42));
     assert.throws(() => normalizeDisplayName(null));
+  });
+});
+
+describe("state revisions", () => {
+  test("reads the revision, defaulting to zero", () => {
+    assert.equal(revisionOf({ revision: 7 }), 7);
+    assert.equal(revisionOf({}), 0);
+    assert.equal(revisionOf(null), 0);
+    assert.equal(revisionOf(undefined), 0);
+  });
+
+  test("state older than what we hold is refused", () => {
+    // The exact case behind the duplicated share link: a read that predates a
+    // write we already applied must never be rendered.
+    assert.equal(isAcceptableRevision({ revision: 4 }, 5), false);
+    assert.equal(isAcceptableRevision({ revision: 0 }, 1), false);
+    assert.equal(isAcceptableRevision({}, 1), false);
+  });
+
+  test("state at or ahead of what we hold is accepted", () => {
+    assert.equal(isAcceptableRevision({ revision: 5 }, 5), true);
+    assert.equal(isAcceptableRevision({ revision: 6 }, 5), true);
+    assert.equal(isAcceptableRevision({ revision: 0 }, 0), true);
   });
 });

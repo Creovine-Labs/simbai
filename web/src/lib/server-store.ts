@@ -11,6 +11,7 @@ import {
   makeId,
   normalizeDisplayName,
   publicLink,
+  revisionOf,
 } from "./local-product";
 import type {
   AppUser,
@@ -47,6 +48,19 @@ function shouldUseVercelBlob() {
   return process.env.VERCEL === "1";
 }
 
+/**
+ * The last state this instance wrote. The blob store can serve a read that
+ * predates our own write, so we keep the newer of the two.
+ */
+let lastWritten: { revision: number; state: LocalState } | null = null;
+
+function freshest(fromStore: LocalState): LocalState {
+  if (lastWritten && lastWritten.revision > revisionOf(fromStore)) {
+    return lastWritten.state;
+  }
+  return fromStore;
+}
+
 export async function readServerState(): Promise<LocalState> {
   if (shouldUseVercelBlob()) {
     try {
@@ -60,21 +74,23 @@ export async function readServerState(): Promise<LocalState> {
       }
 
       const raw = await new Response(result.stream).text();
-      return { ...emptyState(), ...JSON.parse(raw) } as LocalState;
+      return freshest({ ...emptyState(), ...JSON.parse(raw) } as LocalState);
     } catch {
-      return emptyState();
+      return freshest(emptyState());
     }
   }
 
   try {
     const raw = await readFile(STATE_FILE, "utf8");
-    return { ...emptyState(), ...JSON.parse(raw) } as LocalState;
+    return freshest({ ...emptyState(), ...JSON.parse(raw) } as LocalState);
   } catch {
-    return emptyState();
+    return freshest(emptyState());
   }
 }
 
 async function writeServerState(state: LocalState) {
+  lastWritten = { revision: revisionOf(state), state };
+
   if (shouldUseVercelBlob()) {
     await put(STATE_BLOB_PATH, JSON.stringify(state, null, 2), {
       access: "private",
@@ -113,7 +129,11 @@ type Mutation<T> = (state: LocalState) => Promise<[LocalState, T]> | [LocalState
 async function mutateState<T>(mutate: Mutation<T>): Promise<T> {
   return withStateLock(async () => {
     const current = await readServerState();
-    const [next, result] = await mutate(current);
+    // The revision is advanced before the mutator runs, so every state it
+    // derives by spreading — including the one it hands back to the caller —
+    // already carries the new value.
+    const staged: LocalState = { ...current, revision: revisionOf(current) + 1 };
+    const [next, result] = await mutate(staged);
     await writeServerState(next);
     return result;
   });

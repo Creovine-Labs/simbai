@@ -13,7 +13,9 @@ import {
   emptyState,
   formatBytes,
   fromDateTimeLocalValue,
+  isAcceptableRevision,
   isExpired,
+  revisionOf,
   summarizeLink,
   toDateTimeLocalValue,
 } from "@/lib/local-product";
@@ -82,6 +84,13 @@ export function Dashboard() {
    * away and looks like it was never made.
    */
   const writeGeneration = useRef(0);
+  /**
+   * Highest state revision this page has seen. The store behind the API can
+   * serve a read that predates a write we already applied, so anything older
+   * than this is dropped rather than rendered — that stale read is what made a
+   * newly created link disappear and get created a second time.
+   */
+  const knownRevision = useRef(0);
 
   const selectedFile = state.files.find((file) => file.id === selectedFileId);
   const selectedLinks = state.links.filter((link) => link.fileId === selectedFileId);
@@ -137,6 +146,14 @@ export function Dashboard() {
     }
 
     const nextState = payload.state as LocalState;
+
+    // The store had not caught up with a write we have already applied.
+    if (!isAcceptableRevision(nextState, knownRevision.current)) {
+      setAuthChecked(true);
+      return;
+    }
+
+    knownRevision.current = revisionOf(nextState);
     const nextUser = payload.user as PublicUser;
 
     // Every poll hands back a fresh object. Keeping the existing reference when
@@ -200,6 +217,7 @@ export function Dashboard() {
 
       const nextState = payload as LocalState;
       writeGeneration.current += 1;
+      knownRevision.current = Math.max(knownRevision.current, revisionOf(nextState));
       signatureRef.current = stateSignature(nextState);
       setState(nextState);
       setSelectedFileId(nextState.files[0]?.id ?? "");
@@ -228,6 +246,7 @@ export function Dashboard() {
 
     const nextState = payload as LocalState;
     writeGeneration.current += 1;
+    knownRevision.current = Math.max(knownRevision.current, revisionOf(nextState));
     signatureRef.current = stateSignature(nextState);
     setState(nextState);
   }

@@ -117,6 +117,12 @@ export type AuthSession = {
 };
 
 export type LocalState = {
+  /**
+   * Bumped on every write. Readers use it to refuse state older than what they
+   * already hold, which matters because the blob store behind this is not
+   * guaranteed to serve a read-after-write immediately.
+   */
+  revision?: number;
   users: AppUser[];
   authSessions: AuthSession[];
   files: FileAsset[];
@@ -132,6 +138,7 @@ export const MAX_PASSWORD_LENGTH = 200;
 
 export function emptyState(): LocalState {
   return {
+    revision: 0,
     users: [],
     authSessions: [],
     files: [],
@@ -139,6 +146,22 @@ export function emptyState(): LocalState {
     events: [],
     sessions: [],
   };
+}
+
+export function revisionOf(state: Pick<LocalState, "revision"> | null | undefined) {
+  return state?.revision ?? 0;
+}
+
+/**
+ * True when `incoming` is at least as fresh as what we already have. A poll
+ * that raced a write, or a replica that has not caught up, reports an older
+ * revision and must be ignored rather than applied.
+ */
+export function isAcceptableRevision(
+  incoming: Pick<LocalState, "revision"> | null | undefined,
+  known: number,
+) {
+  return revisionOf(incoming) >= known;
 }
 
 export function makeId(prefix: string) {
