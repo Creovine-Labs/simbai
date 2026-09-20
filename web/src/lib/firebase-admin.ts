@@ -13,15 +13,18 @@ type FirebaseJwtPayload = {
   iss?: string;
   sub?: string;
   email?: string;
+  email_verified?: boolean;
   name?: string;
   picture?: string;
   exp?: number;
   iat?: number;
+  auth_time?: number;
 };
 
 export type VerifiedFirebaseUser = {
   uid: string;
   email: string;
+  emailVerified: boolean;
   name: string;
   picture?: string;
 };
@@ -91,6 +94,10 @@ export async function verifyFirebaseIdToken(
     throw new Error("Firebase ID token subject is invalid.");
   }
 
+  if (payload.auth_time && payload.auth_time > now + 60) {
+    throw new Error("Firebase ID token auth time is invalid.");
+  }
+
   if (!payload.email) {
     throw new Error("Firebase account is missing an email address.");
   }
@@ -98,6 +105,7 @@ export async function verifyFirebaseIdToken(
   return {
     uid: payload.sub,
     email: payload.email.toLowerCase(),
+    emailVerified: payload.email_verified === true,
     name: payload.name || payload.email.split("@")[0],
     picture: payload.picture,
   };

@@ -1,18 +1,33 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { del, get, put } from "@vercel/blob";
 import {
+  MAX_PASSWORD_LENGTH,
+  applyLinkPatch,
+  emptyState,
+  isExpired,
+  makeId,
+  publicLink,
+} from "./local-product";
+import type {
+  ClientEventType,
+  EventMetadata,
   FileAsset,
   LocalState,
+  PublicShareLink,
   ShareLink,
   TrackingEvent,
   ViewerSession,
-  emptyState,
-  getFileKind,
-  isExpired,
-  makeId,
-} from "@/lib/local-product";
+} from "./local-product";
+import { countPdfPages, sniffFileType } from "./file-type";
+import {
+  normalizePageNumber,
+  passwordFingerprint,
+  trimEventsForLink,
+  validateShareLink,
+  verifyLinkPassword,
+} from "./state-access";
 
 const STATE_BLOB_PATH = "state/state.json";
 const DATA_DIR =
@@ -22,6 +37,11 @@ const DATA_DIR =
 const STATE_FILE = path.join(DATA_DIR, "state.json");
 
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+export const MAX_UPLOADS_PER_REQUEST = 10;
+
+function shouldUseVercelBlob() {
+  return process.env.VERCEL === "1";
+}
 
 export async function readServerState(): Promise<LocalState> {
   if (shouldUseVercelBlob()) {
@@ -50,7 +70,7 @@ export async function readServerState(): Promise<LocalState> {
   }
 }
 
-export async function writeServerState(state: LocalState) {
+async function writeServerState(state: LocalState) {
   if (shouldUseVercelBlob()) {
     await put(STATE_BLOB_PATH, JSON.stringify(state, null, 2), {
       access: "private",
@@ -64,280 +84,127 @@ export async function writeServerState(state: LocalState) {
   await writeFile(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
 }
 
-export async function resetServerState(userId?: string) {
-  if (shouldUseVercelBlob()) {
-    const currentState = await readServerState();
-    const blobPaths = currentState.files
-      .filter((file) => !userId || file.ownerUserId === userId)
-      .map((file) => file.blobPath)
-      .filter((blobPath): blobPath is string => Boolean(blobPath));
+/**
+ * Serializes every read-modify-write cycle so concurrent requests in this
+ * process cannot clobber one another.
+ *
+ * This is a per-instance lock. The JSON store has no compare-and-set, so two
+ * Vercel lambdas writing at the same instant can still lose an update; that is
+ * a property of the prototype store and goes away with a real database.
+ */
+let mutationQueue: Promise<unknown> = Promise.resolve();
 
-    if (blobPaths.length > 0) {
-      await del(blobPaths);
-    }
-  }
-
-  if (userId) {
-    const state = await readServerState();
-    const userFileIds = new Set(
-      state.files.filter((file) => file.ownerUserId === userId).map((file) => file.id),
-    );
-    const userLinkIds = new Set(
-      state.links
-        .filter((link) => link.ownerUserId === userId && userFileIds.has(link.fileId))
-        .map((link) => link.id),
-    );
-
-    const nextState = {
-      ...state,
-      files: state.files.filter((file) => file.ownerUserId !== userId),
-      links: state.links.filter((link) => !userLinkIds.has(link.id)),
-      sessions: state.sessions.filter((session) => !userLinkIds.has(session.linkId)),
-      events: state.events.filter((event) => !userLinkIds.has(event.linkId)),
-    };
-
-    await writeServerState(nextState);
-    return nextState;
-  }
-
-  const state = emptyState();
-  await writeServerState(state);
-  return state;
-}
-
-export async function addUploadedFile(file: File, ownerUserId: string) {
-  const kind = getFileKind(file.type);
-  if (!kind) {
-    throw new Error("Only PDF and image files are supported.");
-  }
-
-  if (file.size > MAX_UPLOAD_BYTES) {
-    throw new Error("Files must be 25 MB or smaller in local V1.");
-  }
-
-  const bytes = Buffer.from(await file.arrayBuffer());
-  const id = makeId("file");
-  const blobPath = `files/${id}-${safeBlobName(file.name)}`;
-
-  if (shouldUseVercelBlob()) {
-    await put(blobPath, bytes, {
-      access: "private",
-      contentType: file.type,
-    });
-  }
-
-  const asset: FileAsset = {
-    id,
-    ownerUserId,
-    name: file.name,
-    type: file.type,
-    kind,
-    size: file.size,
-    dataUrl: shouldUseVercelBlob()
-      ? undefined
-      : `data:${file.type};base64,${bytes.toString("base64")}`,
-    blobPath: shouldUseVercelBlob() ? blobPath : undefined,
-    pageCount: kind === "pdf" ? countPdfPages(bytes) : 1,
-    createdAt: new Date().toISOString(),
-  };
-
-  const state = await readServerState();
-  const nextState = { ...state, files: [asset, ...state.files] };
-  await writeServerState(nextState);
-  return nextState;
-}
-
-export async function createShareLink(fileId: string, ownerUserId: string) {
-  const state = await readServerState();
-  const file = state.files.find(
-    (item) => item.id === fileId && item.ownerUserId === ownerUserId,
+function withStateLock<T>(run: () => Promise<T>): Promise<T> {
+  // Chained on both settle paths so one failed mutation cannot stall the queue.
+  const next = mutationQueue.then(run, run);
+  mutationQueue = next.then(
+    () => undefined,
+    () => undefined,
   );
-
-  if (!file) {
-    throw new Error("File not found.");
-  }
-
-  const link: ShareLink = {
-    id: makeId("link"),
-    ownerUserId,
-    fileId: file.id,
-    token: makeId("share"),
-    title: `${file.name} link`,
-    enabled: true,
-    allowDownload: false,
-    createdAt: new Date().toISOString(),
-  };
-
-  const nextState = { ...state, links: [link, ...state.links] };
-  await writeServerState(nextState);
-  return nextState;
+  return next;
 }
 
-export async function updateShareLink(
-  linkId: string,
-  patch: Partial<ShareLink>,
-  ownerUserId: string,
-) {
-  const state = await readServerState();
-  const allowedPatch: Partial<ShareLink> = {
-    title: patch.title,
-    enabled: patch.enabled,
-    password: patch.password,
-    expiresAt: patch.expiresAt,
-    allowDownload: patch.allowDownload,
-  };
+type Mutation<T> = (state: LocalState) => Promise<[LocalState, T]> | [LocalState, T];
 
-  const nextState = {
-    ...state,
-    links: state.links.map((link) =>
-      link.id === linkId && link.ownerUserId === ownerUserId
-        ? { ...link, ...allowedPatch }
-        : link,
-    ),
-  };
-
-  await writeServerState(nextState);
-  return nextState;
-}
-
-export async function createViewerSession(
-  token: string,
-  userAgent: string,
-  viewport: string,
-) {
-  const state = await readServerState();
-  const link = state.links.find((item) => item.token === token);
-  const validation = validateShareLink(state, token);
-
-  if (!validation.ok) {
-    if (link) {
-      await addTrackingEvent({
-        linkId: link.id,
-        fileId: link.fileId,
-        sessionId: "blocked",
-        eventType: "link_blocked",
-        metadata: { reason: validation.reason },
-      });
-    }
-
-    return validation;
-  }
-
-  const now = new Date().toISOString();
-  const session: ViewerSession = {
-    id: makeId("ses"),
-    linkId: validation.link.id,
-    fileId: validation.file.id,
-    startedAt: now,
-    lastSeenAt: now,
-    userAgent,
-  };
-
-  const event: TrackingEvent = {
-    id: makeId("evt"),
-    linkId: validation.link.id,
-    fileId: validation.file.id,
-    sessionId: session.id,
-    eventType: "viewer_started",
-    occurredAt: now,
-    metadata: { viewport },
-  };
-
-  const freshState = await readServerState();
-  await writeServerState({
-    ...freshState,
-    sessions: [session, ...freshState.sessions],
-    events: [event, ...freshState.events],
+async function mutateState<T>(mutate: Mutation<T>): Promise<T> {
+  return withStateLock(async () => {
+    const current = await readServerState();
+    const [next, result] = await mutate(current);
+    await writeServerState(next);
+    return result;
   });
-
-  return { ...validation, session };
 }
 
-export async function addTrackingEvent(
-  event: Omit<TrackingEvent, "id" | "occurredAt">,
-) {
-  const state = await readServerState();
-  const link = state.links.find((item) => item.id === event.linkId);
+export { mutateState };
 
-  if (!link || !link.enabled || isExpired(link)) {
-    return state;
+/* -------------------------------------------------------------------------- */
+/* File content                                                               */
+/* -------------------------------------------------------------------------- */
+
+function safeBlobName(name: string) {
+  return name.replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 120) || "file";
+}
+
+function localPathFor(storagePath: string) {
+  const resolved = path.resolve(DATA_DIR, storagePath);
+  const root = path.resolve(DATA_DIR);
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+    throw new Error("Refusing to read outside the data directory.");
+  }
+  return resolved;
+}
+
+async function writeFileContent(storagePath: string, bytes: Buffer, type: string) {
+  if (shouldUseVercelBlob()) {
+    await put(storagePath, bytes, { access: "private", contentType: type });
+    return;
   }
 
-  const nextEvent: TrackingEvent = {
-    ...event,
-    id: makeId("evt"),
-    occurredAt: new Date().toISOString(),
-  };
+  const target = localPathFor(storagePath);
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, bytes);
+}
 
-  const nextState = {
-    ...state,
-    events: [nextEvent, ...state.events],
-    sessions: state.sessions.map((session) =>
-      session.id === event.sessionId
-        ? { ...session, lastSeenAt: nextEvent.occurredAt }
-        : session,
+async function deleteFileContent(files: FileAsset[]) {
+  const keys = files
+    .map((file) => file.storagePath ?? file.blobPath)
+    .filter((key): key is string => Boolean(key));
+
+  if (keys.length === 0) return;
+
+  if (shouldUseVercelBlob()) {
+    await del(keys).catch(() => undefined);
+    return;
+  }
+
+  await Promise.all(
+    keys.map((key) =>
+      rm(localPathFor(key), { force: true }).catch(() => undefined),
     ),
-  };
-
-  await writeServerState(nextState);
-  return nextState;
+  );
 }
 
-export function validateShareLink(state: LocalState, token: string) {
-  const link = state.links.find((item) => item.token === token);
-  if (!link) {
-    return { ok: false as const, reason: "This share link was not found." };
-  }
+export type FileContent = {
+  body: ReadableStream<Uint8Array> | Uint8Array<ArrayBuffer>;
+  contentType: string;
+  filename: string;
+};
 
-  const file = state.files.find((item) => item.id === link.fileId);
-  if (!file) {
-    return { ok: false as const, reason: "The file for this link is missing." };
-  }
+export async function readFileContent(
+  file: FileAsset,
+): Promise<FileContent | null> {
+  const key = file.storagePath ?? file.blobPath;
 
-  if (!link.enabled) {
-    return { ok: false as const, reason: "This share link is disabled." };
-  }
-
-  if (isExpired(link)) {
-    return { ok: false as const, reason: "This share link has expired." };
-  }
-
-  return { ok: true as const, link, file };
-}
-
-export async function readFileContent(fileId: string) {
-  const state = await readServerState();
-  const file = state.files.find((item) => item.id === fileId);
-
-  if (!file) {
-    return null;
-  }
-
-  if (file.blobPath && shouldUseVercelBlob()) {
-    const result = await get(file.blobPath, {
-      access: "private",
-      useCache: false,
-    });
-
-    if (!result || result.statusCode === 304 || !result.stream) {
-      return null;
-    }
+  if (key && shouldUseVercelBlob()) {
+    const result = await get(key, { access: "private", useCache: false });
+    if (!result || result.statusCode === 304 || !result.stream) return null;
 
     return {
-      stream: result.stream,
-      contentType: result.blob.contentType || file.type,
+      body: result.stream,
+      // The stored type was sniffed at upload; never trust the store's echo.
+      contentType: file.type,
       filename: file.name,
     };
   }
 
-  if (file.dataUrl) {
-    const [metadata, base64] = file.dataUrl.split(",");
-    const contentType = metadata.match(/^data:(.*);base64$/)?.[1] ?? file.type;
-    const body = Buffer.from(base64 ?? "", "base64");
+  if (key && !shouldUseVercelBlob()) {
+    try {
+      return {
+        body: new Uint8Array(await readFile(localPathFor(key))),
+        contentType: file.type,
+        filename: file.name,
+      };
+    } catch {
+      return null;
+    }
+  }
 
+  // Written by earlier builds that inlined bytes into the state file.
+  if (file.dataUrl) {
+    const [, base64] = file.dataUrl.split(",");
     return {
-      stream: body,
-      contentType,
+      body: new Uint8Array(Buffer.from(base64 ?? "", "base64")),
+      contentType: file.type,
       filename: file.name,
     };
   }
@@ -345,16 +212,405 @@ export async function readFileContent(fileId: string) {
   return null;
 }
 
-function shouldUseVercelBlob() {
-  return process.env.VERCEL === "1";
+/* -------------------------------------------------------------------------- */
+/* Uploads                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Validates and stores every upload before touching the state file, so a
+ * rejected file cannot leave earlier files half-committed.
+ */
+export async function addUploadedFiles(files: File[], ownerUserId: string) {
+  if (files.length === 0) {
+    throw new Error("No files uploaded.");
+  }
+
+  if (files.length > MAX_UPLOADS_PER_REQUEST) {
+    throw new Error(`Upload at most ${MAX_UPLOADS_PER_REQUEST} files at a time.`);
+  }
+
+  const prepared: { asset: FileAsset; bytes: Buffer }[] = [];
+
+  for (const file of files) {
+    if (file.size > MAX_UPLOAD_BYTES) {
+      throw new Error(`"${file.name}" is larger than 25 MB.`);
+    }
+
+    const bytes = Buffer.from(await file.arrayBuffer());
+    if (bytes.byteLength > MAX_UPLOAD_BYTES) {
+      throw new Error(`"${file.name}" is larger than 25 MB.`);
+    }
+
+    const sniffed = sniffFileType(bytes);
+    if (!sniffed) {
+      throw new Error(
+        `"${file.name}" is not a PDF, PNG, JPEG, GIF or WebP file.`,
+      );
+    }
+
+    const id = makeId("file");
+    prepared.push({
+      bytes,
+      asset: {
+        id,
+        ownerUserId,
+        name: file.name.slice(0, 200) || "file",
+        // The sniffed type, not the browser's claim, is what gets served back.
+        type: sniffed.contentType,
+        kind: sniffed.kind,
+        size: bytes.byteLength,
+        storagePath: `files/${id}-${safeBlobName(file.name)}`,
+        pageCount:
+          sniffed.kind === "pdf" ? await countPdfPages(bytes) : 1,
+        createdAt: new Date().toISOString(),
+      },
+    });
+  }
+
+  for (const { asset, bytes } of prepared) {
+    await writeFileContent(asset.storagePath!, bytes, asset.type);
+  }
+
+  return mutateState((state) => {
+    const next = {
+      ...state,
+      files: [...prepared.map((item) => item.asset), ...state.files],
+    };
+    return [next, next];
+  });
 }
 
-function safeBlobName(name: string) {
-  return name.replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 120);
+/* -------------------------------------------------------------------------- */
+/* Links                                                                      */
+/* -------------------------------------------------------------------------- */
+
+export async function createShareLink(fileId: string, ownerUserId: string) {
+  return mutateState((state) => {
+    const file = state.files.find(
+      (item) => item.id === fileId && item.ownerUserId === ownerUserId,
+    );
+
+    if (!file) {
+      throw new Error("File not found.");
+    }
+
+    const link: ShareLink = {
+      id: makeId("link"),
+      ownerUserId,
+      fileId: file.id,
+      token: makeId("share"),
+      title: `${file.name} link`,
+      enabled: true,
+      allowDownload: false,
+      createdAt: new Date().toISOString(),
+    };
+
+    const next = { ...state, links: [link, ...state.links] };
+    return [next, next];
+  });
 }
 
-function countPdfPages(bytes: Buffer) {
-  const content = bytes.toString("latin1");
-  const matches = content.match(/\/Type\s*\/Page\b/g);
-  return Math.max(matches?.length ?? 1, 1);
+export async function updateShareLink(
+  linkId: string,
+  patch: unknown,
+  ownerUserId: string,
+) {
+  return mutateState((state) => {
+    const existing = state.links.find(
+      (link) => link.id === linkId && link.ownerUserId === ownerUserId,
+    );
+
+    if (!existing) {
+      throw new Error("Link not found.");
+    }
+
+    const updated = applyLinkPatch(existing, patch);
+    const next = {
+      ...state,
+      links: state.links.map((link) => (link.id === linkId ? updated : link)),
+    };
+    return [next, next];
+  });
 }
+
+/* -------------------------------------------------------------------------- */
+/* Viewer access                                                              */
+/* -------------------------------------------------------------------------- */
+
+export type ShareSnapshot =
+  | { ok: false; reason: string; passwordRequired?: boolean }
+  | { ok: true; link: PublicShareLink; file: PublicFile };
+
+export type PublicFile = {
+  id: string;
+  name: string;
+  kind: FileAsset["kind"];
+  type: string;
+  size: number;
+  pageCount: number;
+};
+
+function publicFile(file: FileAsset): PublicFile {
+  return {
+    id: file.id,
+    name: file.name,
+    kind: file.kind,
+    type: file.type,
+    size: file.size,
+    pageCount: file.pageCount,
+  };
+}
+
+/** What an anonymous caller may learn about a link: never the password. */
+export async function readShareSnapshot(token: string): Promise<ShareSnapshot> {
+  const state = await readServerState();
+  const validation = validateShareLink(state, token);
+
+  if (!validation.ok) {
+    return { ok: false, reason: validation.reason };
+  }
+
+  return {
+    ok: true,
+    link: publicLink(validation.link),
+    file: publicFile(validation.file),
+  };
+}
+
+export type OpenViewerResult =
+  | { ok: false; reason: string; passwordRequired: boolean }
+  | {
+      ok: true;
+      link: PublicShareLink;
+      file: PublicFile;
+      session: Pick<ViewerSession, "id" | "linkId" | "fileId" | "startedAt">;
+    };
+
+/**
+ * Creates a viewer session, which is the grant the content route checks. The
+ * password is verified here, on the server, and never leaves it.
+ */
+export async function openViewerSession(input: {
+  token: string;
+  password?: string;
+  userAgent: string;
+  viewport: string;
+}): Promise<OpenViewerResult> {
+  return mutateState<OpenViewerResult>((state) => {
+    const validation = validateShareLink(state, input.token);
+
+    if (!validation.ok) {
+      const link = state.links.find((item) => item.token === input.token);
+      const blocked: LocalState = link
+        ? {
+            ...state,
+            events: trimEventsForLink(
+              [
+                {
+                  id: makeId("evt"),
+                  linkId: link.id,
+                  fileId: link.fileId,
+                  sessionId: "blocked",
+                  eventType: "link_blocked",
+                  metadata: { reason: validation.reason },
+                  occurredAt: new Date().toISOString(),
+                },
+                ...state.events,
+              ],
+              link.id,
+            ),
+          }
+        : state;
+
+      return [
+        blocked,
+        { ok: false, reason: validation.reason, passwordRequired: false },
+      ];
+    }
+
+    const { link, file } = validation;
+    const supplied = input.password?.slice(0, MAX_PASSWORD_LENGTH);
+
+    if (!verifyLinkPassword(link, supplied)) {
+      return [
+        state,
+        {
+          ok: false,
+          reason: supplied
+            ? "That password is not correct."
+            : "This share link is password protected.",
+          passwordRequired: true,
+        },
+      ];
+    }
+
+    const now = new Date().toISOString();
+    const session: ViewerSession = {
+      id: makeId("ses"),
+      linkId: link.id,
+      fileId: file.id,
+      startedAt: now,
+      lastSeenAt: now,
+      userAgent: input.userAgent.slice(0, 300),
+      passwordFingerprint: passwordFingerprint(link.password),
+    };
+
+    const events: TrackingEvent[] = [
+      {
+        id: makeId("evt"),
+        linkId: link.id,
+        fileId: file.id,
+        sessionId: session.id,
+        eventType: "viewer_started",
+        occurredAt: now,
+        metadata: { viewport: input.viewport.slice(0, 32) },
+      },
+      {
+        id: makeId("evt"),
+        linkId: link.id,
+        fileId: file.id,
+        sessionId: session.id,
+        eventType: "link_opened",
+        occurredAt: now,
+      },
+    ];
+
+    const next: LocalState = {
+      ...state,
+      sessions: [session, ...state.sessions],
+      events: trimEventsForLink([...events, ...state.events], link.id),
+    };
+
+    return [
+      next,
+      {
+        ok: true,
+        link: publicLink(link),
+        file: publicFile(file),
+        session: {
+          id: session.id,
+          linkId: session.linkId,
+          fileId: session.fileId,
+          startedAt: session.startedAt,
+        },
+      },
+    ];
+  });
+}
+
+/**
+ * Re-checks a grant on every use, so disabling a link, letting it expire, or
+ * changing its password takes effect immediately for sessions already open.
+ */
+export function resolveViewerGrant(
+  state: LocalState,
+  token: string,
+  sessionId: string | undefined,
+) {
+  if (!sessionId) return null;
+
+  const validation = validateShareLink(state, token);
+  if (!validation.ok) return null;
+
+  const session = state.sessions.find((item) => item.id === sessionId);
+  if (!session || session.linkId !== validation.link.id) return null;
+
+  if (session.passwordFingerprint !== passwordFingerprint(validation.link.password)) {
+    return null;
+  }
+
+  return { link: validation.link, file: validation.file, session };
+}
+
+/** Presence only: keeps "viewing now" fresh without storing an event per tick. */
+export async function touchViewerSession(token: string, sessionId: string) {
+  return mutateState((state) => {
+    const grant = resolveViewerGrant(state, token, sessionId);
+    if (!grant) return [state, false];
+
+    const next = {
+      ...state,
+      sessions: state.sessions.map((session) =>
+        session.id === sessionId
+          ? { ...session, lastSeenAt: new Date().toISOString() }
+          : session,
+      ),
+    };
+    return [next, true];
+  });
+}
+
+export async function recordViewerEvent(input: {
+  token: string;
+  sessionId: string;
+  eventType: ClientEventType;
+  pageNumber?: unknown;
+  metadata?: EventMetadata;
+}) {
+  return mutateState((state) => {
+    const grant = resolveViewerGrant(state, input.token, input.sessionId);
+    if (!grant) return [state, false];
+
+    if (input.eventType === "download_clicked" && !grant.link.allowDownload) {
+      return [state, false];
+    }
+
+    const occurredAt = new Date().toISOString();
+    const event: TrackingEvent = {
+      id: makeId("evt"),
+      // Identity comes from the grant, never from the request body.
+      linkId: grant.link.id,
+      fileId: grant.file.id,
+      sessionId: grant.session.id,
+      eventType: input.eventType,
+      pageNumber: normalizePageNumber(input.pageNumber, grant.file.pageCount),
+      metadata: input.metadata,
+      occurredAt,
+    };
+
+    const next: LocalState = {
+      ...state,
+      events: trimEventsForLink([event, ...state.events], grant.link.id),
+      sessions: state.sessions.map((session) =>
+        session.id === grant.session.id
+          ? { ...session, lastSeenAt: occurredAt }
+          : session,
+      ),
+    };
+
+    return [next, true];
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Reset                                                                      */
+/* -------------------------------------------------------------------------- */
+
+export async function resetServerState(userId: string) {
+  const doomed = await mutateState((state) => {
+    const userFiles = state.files.filter((file) => file.ownerUserId === userId);
+    const userFileIds = new Set(userFiles.map((file) => file.id));
+    const userLinkIds = new Set(
+      state.links
+        .filter((link) => link.ownerUserId === userId && userFileIds.has(link.fileId))
+        .map((link) => link.id),
+    );
+
+    const next: LocalState = {
+      ...state,
+      files: state.files.filter((file) => file.ownerUserId !== userId),
+      links: state.links.filter((link) => !userLinkIds.has(link.id)),
+      sessions: state.sessions.filter((session) => !userLinkIds.has(session.linkId)),
+      events: state.events.filter((event) => !userLinkIds.has(event.linkId)),
+    };
+
+    return [next, { next, userFiles }];
+  });
+
+  // Content is removed after the state write: an orphaned blob is harmless,
+  // a state row pointing at deleted bytes is not.
+  await deleteFileContent(doomed.userFiles);
+  return doomed.next;
+}
+
+export { isExpired, validateShareLink };

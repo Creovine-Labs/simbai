@@ -32,13 +32,17 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
 
+# local prototype storage (state file + uploaded bytes)
+/.data
+
+# browser automation output
+/.playwright-mcp
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-
-.vercel
-.env*
