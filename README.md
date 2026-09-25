@@ -1,113 +1,122 @@
 # Simbai
 
-Simbai is a trackable file-sharing platform prototype. Users can upload files, create share links, open those links in a public viewer, and track viewer activity from a dashboard.
+Share a document and know what happens after you hit send.
 
-## Current Version
+Simbai lets you upload a PDF or an image, make a share link for it, and see
+who opened it, which pages they looked at, and whether they downloaded it. It is
+built for the moment after you send a pitch deck, a proposal or a report and
+want to know if anybody actually looked.
 
-This repository currently contains a local V1 prototype. It is designed for product testing before Supabase, authentication, persistent object storage, and Vercel deployment are connected.
+This is an open source project built step by step in the
+[Creovine Academy](https://academy.creovine.com) course AI Software
+Engineering. Each lesson adds to it, so the history of this repository is the
+course.
 
-Implemented in local V1:
+## What it does
 
-- Signup and login
-- Firebase Authentication integration
-- Continue with Google
-- Firebase-verified users and secure session cookies
-- User-owned dashboard files, links, sessions, and analytics
-- PDF and image uploads
-- Share-link creation
-- Public viewer route
-- Link enable/disable controls
-- Optional password and expiry fields
-- Download permission toggle
-- Viewer sessions
-- Page-view and heartbeat events
-- Download click tracking
-- Dashboard analytics summary and activity feed
-- Local server-side JSON storage for demo data
-- Vercel Blob storage for hosted demo state and uploaded file content
+**Your library**
 
-## Project Structure
+- Sign up with email and password, or continue with Google
+- Upload PDFs and images (PNG, JPEG, WebP, GIF), up to 25 MB each and 10 at a time
+- Preview any document exactly as the person you share it with will see it
+- A profile page to change your name and profile picture
 
-```text
-.
-├── PRODUCT_ARCHITECTURE.md
-├── README.md
-└── web
-    ├── src/app
-    │   ├── api
-    │   ├── page.tsx
-    │   └── view/[token]/page.tsx
-    └── src/lib
-```
+**Share links**
 
-## Local Development
+- Make one or more share links per document, each with its own name
+- Optional password, checked on the server
+- Optional expiry date
+- Turn downloading on or off
+- Switch a link off at any time, or delete it
 
-Requirements:
+**Tracking**
 
-- Node.js 20+
-- npm
+- When a link was opened, and by how many viewers
+- Which pages each viewer opened, and how long they had it open
+- Who is reading right now
+- Download clicks
+- A dashboard with totals and an activity feed that updates while you watch
 
-Run the app:
+Anyone with a link can open it in their browser. They do not need an account.
+
+## What it does not do yet
+
+- Markdown, Word or other file types. PDFs and images only.
+- Search inside documents.
+- Teams or shared workspaces. Each account sees only its own files.
+- Email notifications when a link is opened.
+
+## How it is built
+
+| Part | Uses |
+| --- | --- |
+| App | Next.js 16, React 19, TypeScript, Tailwind CSS 4 |
+| Sign in | Firebase Authentication (email and password, Google) |
+| Storage, deployed | Vercel Blob, for files and app data |
+| Storage, on your computer | a JSON file in `web/.data/`, ignored by Git |
+| Hosting | Vercel |
+
+The storage choice is automatic: on Vercel (`VERCEL=1`) it uses Blob, on your
+own machine it writes to `web/.data/`. A single JSON file is fine for a demo and
+is not meant for many users at once. A real database is on the roadmap.
+
+## Run it on your computer
+
+You need Node.js 20 or newer and a Firebase project with Email/Password and
+Google sign-in turned on.
 
 ```bash
-cd web
+git clone https://github.com/Creovine-Labs/simbai.git
+cd simbai/web
 npm install
+cp .env.example .env.local
+```
+
+Open `web/.env.local` and fill in your own Firebase values. They are in the
+Firebase console under Project settings, then Your apps. `.env.example` says
+what each one is. Then:
+
+```bash
 npm run dev
 ```
 
-Open:
+and open http://localhost:3000.
 
-```text
-http://127.0.0.1:3000
-```
+`.env.local` is ignored by Git on purpose, so your keys never end up on GitHub.
+That is also why a fresh clone cannot sign anybody in until you add them.
 
-## Verification
+## Deploy it
 
-From the `web` directory:
+1. Import the repository into Vercel and set the root directory to `web`.
+2. Add a Vercel Blob store to the project. That sets `BLOB_READ_WRITE_TOKEN`.
+3. Add the Firebase variables from `.env.example` to the project's environment variables.
+4. In Firebase, under Authentication, then Settings, then Authorized domains, add your Vercel address. Google sign-in fails without it.
+
+## Checks
+
+From `web/`:
 
 ```bash
-npm run lint
+npm run check   # lint, type check and unit tests
 npm run build
 ```
 
-## Local Data
-
-Local development stores prototype files, links, sessions, and events in:
-
-```text
-web/.data/state.json
-```
-
-That file is ignored by Git.
-
-The hosted Vercel demo stores uploaded file content and prototype state in a private Vercel Blob store. This is persistent across deployments, but it is still a prototype storage model. The production product direction remains Supabase Auth, PostgreSQL, and private object storage with real users/workspaces.
-
-## Accounts
-
-The current V1 includes self-contained prototype accounts. Users can sign up at `/signup`, log in at `/login`, and manage only their own uploaded files and share links.
-
-Firebase Auth is now the authentication source. The app supports email/password auth and Google sign-in through Firebase, then creates a Simbai HTTP-only session cookie after the server verifies the Firebase ID token.
-
-Required Firebase setup:
-
-1. Create a Firebase project.
-2. Enable Authentication.
-3. Enable Email/Password provider.
-4. Enable Google provider.
-5. Add the deployed Vercel domain to Firebase Auth authorized domains.
-6. Create a Firebase web app and copy the client config values into `web/.env.local`.
-7. Add `FIREBASE_PROJECT_ID` to Vercel environment variables so the server can verify Firebase ID tokens.
-
-Use `web/.env.example` as the template.
+The same checks run on every pull request.
 
 ## Roadmap
 
-Next major steps:
+- A real database instead of one JSON file
+- Search across your documents
+- More file types
+- Notifications when someone opens your link
+- Teams
 
-- Connect Supabase Auth
-- Add PostgreSQL and Prisma schema
-- Move file storage to Supabase Storage
-- Replace local JSON tracking with database-backed events
-- Deploy an early thin slice to Vercel
+`PRODUCT_ARCHITECTURE.md` has the longer product thinking behind it.
 
-See `PRODUCT_ARCHITECTURE.md` for the full product architecture.
+## License
+
+Copyright 2026 Creovine Labs.
+
+Licensed under the [Apache License, Version 2.0](LICENSE). You can use, change
+and share this code, including commercially, as long as you keep the license
+and say what you changed.
